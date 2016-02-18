@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Author: Keith Kyzivat <kamaji@gmail.com>
+# To use this script, please create this entry in /etc/sudoers or /etc/sudoers.d/git_create_new_repo:
+# %git ALL=(git3) NOPASSWD: /git/create_new_repo
+
+# Note: Only users that are in the 'git' group can use this command.
+
+set -u -e
+scriptpath=`dirname $0`
+scriptpath=`(cd "$scriptpath"; /bin/pwd)`
+cd $scriptpath
+
+if [ "$USER" != "git3" ]; then
+    groups=$(groups)
+    gitgrouppresent=0
+    for g in $groups; do
+        if [ "$g" == "git" ]; then
+            gitgrouppresent=1
+        fi
+    done
+    if [ $gitgrouppresent -eq 0 ]; then
+        echo >&2 "Cannot function if you're not part of the 'git' group."
+        exit 1
+    fi
+    exec sudo -u git3 $scriptpath/$(basename $0) $@
+fi
+
+if [ $scriptpath != "/git" ]; then
+    echo >&2 "I only function when present in the /git directory."
+    exit 1
+fi
+
+if [ $# -gt 0 ]; then reponame=$1 ; else reponame= ; fi
+
+if [ -z "$reponame" ]; then
+    echo >&2 "Usage:"
+    echo >&2 "$(basename $0) <Name of new bare git repository>"
+    exit 2
+fi
+
+read -n 1 -p "Ok to create repository $scriptpath/$reponame (y/N)? " ok ; echo
+if [ "$ok" != "y" -a "$ok" != "Y" ]; then
+    echo "Aborted."
+    exit 3
+fi
+echo "Ok to continue."
+
+if [[ "$reponame" != *.git ]]; then
+    reponame=${reponame}.git
+fi
+mkdir $reponame
+chmod 775 $reponame
+git -C $reponame init --bare --shared
+echo "Created repository $scriptpath/$reponame"
