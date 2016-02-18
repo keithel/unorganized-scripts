@@ -1,0 +1,105 @@
+#!/bin/bash
+
+#
+# Author: Keith Kyzivat <keith.kyzivat@l3-com.com>
+#
+# Script to prep and enter an armhf 14.04 Ubuntu Core chroot
+
+scriptpath=`dirname $0`
+scriptpath=`(cd "$scriptpath"; /bin/pwd)`
+
+mountdirs=();
+function bindmount ()
+{
+    src=$1
+    dest=$2
+    sudo mount $src $dest -o bind;
+    mountdirs+=("$dest")
+}
+
+CHROOT_DIR="$1"
+if [ ! -d "$CHROOT_DIR" ]; then
+    CHROOT_DIR="$scriptpath/ubuntu-core-14.04.3-core-armhf-forqemu"
+else
+    # Shift off the chroot dir parameter.
+    shift
+fi
+
+if [ ! -e "$CHROOT_DIR/etc" ]; then
+    echo >&2 "Invalid chroot dir \"$CHROOT_DIR\" specified."
+    echo >&2 "Aborting."
+    exit 1
+fi
+
+if [ ! -e "/usr/bin/qemu-arm-static" ]; then
+    echo >&2 "Qemu tools need to be installed to run arm chroot. Please run:"
+    echo >&2 "  $ sudo apt-get install qemu-user-static"
+    echo >&2 "Aborting."
+    exit 1
+fi
+
+sudo -v
+
+cd "$CHROOT_DIR"
+if [ ! -x usr/bin/qemu-arm-static ]; then
+    sudo cp -a /usr/bin/qemu-arm-static usr/bin
+fi
+
+for m in `echo 'run sys dev proc dev/pts'`; do 
+    mount | grep "$CHROOT_DIR/$m" > /dev/null 2>&1
+    if [ $? -gt 0 ]; then
+            echo "Bind mounting /$m to $CHROOT_DIR/$m"
+            bindmount /$m $CHROOT_DIR/$m
+    fi
+done
+
+if [ -e /vagrant ]; then
+    mount | grep "$CHROOT_DIR/vagrant" > /dev/null 2>&1
+    if [ $? -gt 0 ]; then
+        sudo mkdir -p $CHROOT_DIR/vagrant
+        bindmount /vagrant $CHROOT_DIR/vagrant
+    fi
+fi
+
+# Fix resolv.conf
+if [ ! -L etc/resolv.conf ]; then
+    sudo rm etc/resolv.conf
+    sudo ln -s /run/resolvconf/resolv.conf etc/resolv.conf
+fi
+
+# Make sudo passwordless in chroot
+if [ ! -e etc/sudoers.d/passwordless ]; then
+    sudo bash -c 'echo "vagrant ALL=(ALL) NOPASSWD:ALL" >> etc/sudoers.d/passwordless'
+fi
+
+if [ ! -d "$CHROOT_DIR/home/$USER" ]; then
+    echo "User account $USER doesn't exist. Creating it."
+    LC_ALL=C sudo -E chroot . /usr/sbin/groupadd --gid $(id -g) $USER
+    LC_ALL=C sudo -E chroot . /usr/sbin/useradd -m --uid $(id -u) --gid $(id -g) --shell $SHELL $USER
+fi
+
+if [ -d "/home/$USER/builds" ]; then
+    echo "Mounting $USER's build directory in sysroot"
+    mount | grep "$CHROOT_DIR/home/$USER/builds" > /dev/null 2>&1
+    if [ $? -gt 0 ]; then
+        bindmount $HOME/builds $CHROOT_DIR/home/$USER/builds
+    fi
+fi
+
+# CAVEAT - this assumes that $USER has the uid 1000 and default group 1000
+# This is the case if this is an Ubuntu (14.04 at least) machine and
+# the user logged in is the first created user account on the machine.
+if [ $# -gt 0 ]; then
+    LC_ALL=C sudo -E chroot --userspec=1000:1000 . /bin/bash -c "$*"
+else
+    LC_ALL=C sudo -E chroot --userspec=1000:1000 . /bin/bash
+fi
+
+# Now, unmount all the mounted things.  Weird {{''}} syntax is to get
+# around Jinja considering curley-bracket-hash a comment character -
+# and ansible templates are interpreted by jinja.
+for (( idx={{'${#mountdirs[@]}-1'}} ; idx>=0 ; idx-- )) ; do
+    m=${mountdirs[idx]}
+    echo "Unmounting $m"
+    sudo umount $m
+done
