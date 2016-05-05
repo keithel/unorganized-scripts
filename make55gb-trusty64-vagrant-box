@@ -1,0 +1,36 @@
+#!/bin/sh
+# To make this 55GB ubuntu/trusty64 VM I did the following:
+
+set -e
+set -u
+
+VAGRANT_VMNAME=ubuntu-trusty64-55GB
+if [ -e /tmp/$VAGRANT_VMNAME ]; then
+    echo >&2 "/tmp/$VAGRANT_VMNAME exists!"
+    echo >&2 "Please remove it and re-run to use this script."
+    exit 1
+fi
+
+mkdir -p /tmp/$VAGRANT_VMNAME
+trap "cd /tmp; rm -Rf /tmp/$VAGRANT_VMNAME; exit" INT TERM EXIT
+cd /tmp/$VAGRANT_VMNAME
+vagrant init
+sed -i -e 's/\(config.vm.box = "\)base"/\1ubuntu\/trusty64"/' Vagrantfile
+vagrant_up_outfile=$(mktemp vagrantup.XXXXXXX.out)
+vagrant up --no-provision > $vagrant_up_outfile
+trap "cd /tmp/$VAGRANT_VMNAME; vagrant destroy -f; cd /tmp; rm -Rf /tmp/$VAGRANT_VMNAME; exit" INT TERM EXIT
+vagrant halt
+VMNAME=$(awk '/Setting the name of the VM/ {print $9}' $vagrant_up_outfile)
+VM_PATH="$HOME/VirtualBox VMs/$VMNAME"
+cd "$VM_PATH"
+VBoxManage clonehd box-disk1.vmdk out.vdi --format VDI
+VBoxManage modifyhd out.vdi --resizebyte 59055800320
+VBoxManage clonehd out.vdi box-disk1_50gb.vmdk --format VMDK
+rm out.vdi
+VBoxManage storageattach $VMNAME --storagectl SATAController --port 0 --medium none
+rm box-disk1.vmdk
+VBoxManage storageattach $VMNAME --storagectl SATAController --port 0 --medium "$VM_PATH/box-disk1_50gb.vmdk" --type hdd
+cd /tmp/$VAGRANT_VMNAME
+vagrant package --base $VMNAME --output /tmp/${VAGRANT_VMNAME}.box
+
+# Note that after this, you will end up with some media files that are registered but "inaccessible" -- notably the 'out.vdi' and 'box-disk1.vmdk' from the original VM.
