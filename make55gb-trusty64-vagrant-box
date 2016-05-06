@@ -14,8 +14,11 @@ fi
 mkdir -p /tmp/$VAGRANT_VMNAME
 trap "cd /tmp; rm -Rf /tmp/$VAGRANT_VMNAME; exit" INT TERM EXIT
 cd /tmp/$VAGRANT_VMNAME
-vagrant init
-sed -i -e 's/\(config.vm.box = "\)base"/\1ubuntu\/trusty64"/' Vagrantfile
+vagrant init ubuntu/trusty64
+vagrantfile_backup=$(mktemp Vagrantfile.XXXXXXX.tmp)
+awk '{ print $0 }; /config.vm.box / { print "  config.ssh.insert_key = false"}' Vagrantfile > $vagrantfile_backup
+cat $vagrantfile_backup > Vagrantfile
+rm $vagrantfile_backup
 vagrant_up_outfile=$(mktemp vagrantup.XXXXXXX.out)
 vagrant up --no-provision > $vagrant_up_outfile
 trap "cd /tmp/$VAGRANT_VMNAME; vagrant destroy -f; cd /tmp; rm -Rf /tmp/$VAGRANT_VMNAME; exit" INT TERM EXIT
