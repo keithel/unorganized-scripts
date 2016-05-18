@@ -4,6 +4,7 @@
 set -e
 set -u
 
+USERDIR=$PWD
 VAGRANT_VMNAME=ubuntu-trusty64-55GB
 if [ -e /tmp/$VAGRANT_VMNAME ]; then
     echo >&2 "/tmp/$VAGRANT_VMNAME exists!"
@@ -34,6 +35,6 @@ VBoxManage storageattach $VMNAME --storagectl SATAController --port 0 --medium n
 rm box-disk1.vmdk
 VBoxManage storageattach $VMNAME --storagectl SATAController --port 0 --medium "$VM_PATH/box-disk1_50gb.vmdk" --type hdd
 cd /tmp/$VAGRANT_VMNAME
-vagrant package --base $VMNAME --output /tmp/${VAGRANT_VMNAME}.box
+vagrant package --base $VMNAME --output $USERDIR/${VAGRANT_VMNAME}.box
 
 # Note that after this, you will end up with some media files that are registered but "inaccessible" -- notably the 'out.vdi' and 'box-disk1.vmdk' from the original VM.
