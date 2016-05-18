@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # To make this 55GB ubuntu/trusty64 VM I did the following:
 
 set -e
