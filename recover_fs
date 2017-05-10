@@ -19,32 +19,33 @@ elif [ "$current_rootdev" = "/dev/mmcblk0p3" ]; then
     alt_partlabel="root"
 elif [ "$current_rootdev" = "rootfs" ]; then
     # We're likely in the Petalinux qspi recovery env
-    echo "Recover which of the following partitions?"
     # parts awk is slightly different in petalinux
     parts=$(fdisk /dev/mmcblk0 -l | awk '/\/dev\/mmcblk0/{if($6=="Linux"){print $1}}' | xargs echo)
-    echo "Parts: $parts"
     set $parts
+    idx=1
     partnum=""
-    while case $partnum in ''|*[!0-$((idx-1))]*) idx=1; true;;*) false;; esac; do
+    while [ "$partnum" = "" ]; do
+        echo "Recover which of the following partitions?"
         for part in $parts; do
            echo "    ${idx}) $part"
            idx=$((idx+1))
         done
         read -n1 -p "#? " partnum
         echo
+        case $partnum in ''|*[!0-$((idx-1))]*) echo -e >&2 "Please pick a valid choice.\n"; idx=1; partnum="";; esac
     done
     shift $((partnum-1))
     alt_rootdev=$1
+    alt_partlabel="root"
     set -- ""
     echo "You chose $alt_rootdev"
 
-    mkdir -p /tmp/okroot
-    # Stopped here -- need to choose one of the rootfs partitions that
-    # isn't the one we're recovering, and mount it to find it's rootfs.tar.gz
-    # and use that tarball for recovery.
+    # Find first rootfs partition that isn't the partition we're recovering.
     for part in $parts; do
         if [ "$alt_rootdev" != "$part" ]; then
+            mkdir -p /tmp/okroot
             mount $part /tmp/okroot
+            trap "umount /tmp/okroot; rmdir /tmp/okroot; trap 'exit' INT TERM EXIT; exit" INT TERM EXIT
             break
         fi
     done
@@ -100,8 +101,3 @@ cp $rootfs_filepath /tmp/alt_root/
 sync
 umount /tmp/alt_root
 rmdir /tmp/alt_root
-
-if [ "$current_rootdev" = "rootfs" ]; then
-    umount /tmp/okroot
-    rmdir /tmp/okroot
-fi
