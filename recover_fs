@@ -1,0 +1,107 @@
+#!/bin/bash
+
+set -e -u
+
+if [ $(id -u) -ne 0 ]; then
+    echo >&2 "This script requires root privilege to run."
+    exit 1
+fi
+
+current_rootdev=$(mount | awk '/ \/ / { print $1 }')
+alt_rootdev=""
+alt_partlabel=""
+
+if [ "$current_rootdev" = "/dev/mmcblk0p2" ]; then
+    alt_rootdev="/dev/mmcblk0p3"
+    alt_partlabel="root2"
+elif [ "$current_rootdev" = "/dev/mmcblk0p3" ]; then
+    alt_rootdev="/dev/mmcblk0p2"
+    alt_partlabel="root"
+elif [ "$current_rootdev" = "rootfs" ]; then
+    # We're likely in the Petalinux qspi recovery env
+    echo "Recover which of the following partitions?"
+    # parts awk is slightly different in petalinux
+    parts=$(fdisk /dev/mmcblk0 -l | awk '/\/dev\/mmcblk0/{if($6=="Linux"){print $1}}' | xargs echo)
+    echo "Parts: $parts"
+    set $parts
+    partnum=""
+    while case $partnum in ''|*[!0-$((idx-1))]*) idx=1; true;;*) false;; esac; do
+        for part in $parts; do
+           echo "    ${idx}) $part"
+           idx=$((idx+1))
+        done
+        read -n1 -p "#? " partnum
+        echo
+    done
+    shift $((partnum-1))
+    alt_rootdev=$1
+    set -- ""
+    echo "You chose $alt_rootdev"
+
+    mkdir -p /tmp/okroot
+    # Stopped here -- need to choose one of the rootfs partitions that
+    # isn't the one we're recovering, and mount it to find it's rootfs.tar.gz
+    # and use that tarball for recovery.
+    for part in $parts; do
+        if [ "$alt_rootdev" != "$part" ]; then
+            mount $part /tmp/okroot
+            break
+        fi
+    done
+fi
+
+if [ -z "$alt_rootdev" ]; then
+    echo >&2 "/ is mounted from an unknown device and/or partition!"
+    echo >&2 "Cannot determine partition to recover."
+    exit 2
+fi
+
+alt_valid="NO"
+set +u
+if [ -z "$parts" ]; then
+    parts=$(fdisk /dev/mmcblk0 -l | awk '/\/dev\/mmcblk0/{if($7=="Linux"){print $1}}')
+fi
+set -u
+for part in $parts ; do
+    if [ "$part" == "$alt_rootdev" ]; then
+        alt_valid="YES"
+    fi
+done
+if [ $alt_valid != "YES" ]; then
+    echo >&2 "You do not have a recovery partition!"
+    echo >&2 "To use this utility you need two root partitions, /dev/mmcblk0p2 and /dev/mmcblk0p3"
+    echo >&2 "aborting."
+    exit 3
+fi
+
+if [ -e "/rootfs.tar.gz" ]; then
+    rootfs_filepath="/rootfs.tar.gz"
+elif [ -e "/tmp/okroot/rootfs.tar.gz" ]; then
+    rootfs_filepath="/tmp/okroot/rootfs.tar.gz"
+else
+    echo >&2 "Cannot find rootfs tarball to use to recover the filesystem"
+    exit 4
+fi
+
+read -n1 -p "Ok to re-initialize $alt_rootdev with a fresh copy of the root filesystem [yN]? " continue
+echo
+
+if [ ! "$continue" = "y" -a ! "$continue" = "Y" ]; then
+    echo >&2 "User asked to abort."
+    echo >&2 "aborting."
+    exit 5
+fi
+
+mkfs.ext4 -F -L $alt_partlabel $alt_rootdev
+mkdir /tmp/alt_root
+mount $alt_rootdev /tmp/alt_root
+tar -C /tmp/alt_root -zxvf $rootfs_filepath
+cp $rootfs_filepath /tmp/alt_root/
+sync
+umount /tmp/alt_root
+rmdir /tmp/alt_root
+
+if [ "$current_rootdev" = "rootfs" ]; then
+    umount /tmp/okroot
+    rmdir /tmp/okroot
+fi
