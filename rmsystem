@@ -1,0 +1,101 @@
+#!/bin/bash
+
+set -e -u
+
+SYSTEM_SUFFIX=""
+
+function printUsage
+{
+    echo "Usage: rmsystem [OPTION]..."
+    echo "Remove ares2_platform build output 'system' directory in a safe manner."
+    echo
+    echo "  -o, --old   remove system-old backup instead of 'system'"
+    echo "      --help  display this help and exit"
+}
+
+for i in "$@"; do
+    case $i in
+        -o|--old)
+            SYSTEM_SUFFIX="-old"
+            shift # past argument
+            ;;
+        -h|--help)
+            printUsage
+            exit 1
+            ;;
+        *)
+            echo >&2 "error: Unknown argument $i"
+            echo >&2 "aborting."
+            exit 1
+            ;;
+    esac
+done
+
+systemPath="$HOME/builds/ares2_platform/debian/system${SYSTEM_SUFFIX}"
+if [ -d "../system${SYSTEM_SUFFIX}" ]; then
+    systemPath=$( cd "../system${SYSTEM_SUFFIX}"; pwd -P )
+fi
+
+if [ ! -d "$systemPath" ]; then
+    echo "$systemPath doesn't exist."
+    echo "Nothing to do, Exiting."
+    exit 0
+fi
+
+#echo "Using systemPath: $systemPath"
+#echo
+
+if [[ $PWD =~ $systemPath ]]; then
+    echo >&2 "You appear to be within the $systemPath directory."
+    echo >&2 "Cannot remove directory that you are within."
+    echo >&2 "aborting."
+    exit 3
+fi
+
+trap "echo; exit" INT TERM EXIT
+
+mountsInPath=$(mount | grep "$systemPath" | awk '{print $3}')
+if [ -n "$mountsInPath" ]; then
+    echo "There are mounts present:"
+    for mount in $mountsInPath; do
+        echo "    $mount"
+    done
+    echo "These need to be unmounted before removal."
+    read -p "Unmount them [yN]? " -n 1 -t 300 unmount
+    echo
+    if [ "$unmount" != "y" -a "$unmount" != "Y" ]; then
+        echo >&2 "Not unmounting mounts in $systemPath"
+        echo >&2 "Cannot remove $systemPath as it contains mounted filesystems."
+        echo >&2 "aborting."
+        exit 2
+    fi
+
+    for mount in $mountsInPath; do
+        sudo umount $mount
+    done
+    echo
+fi
+
+echo "We will be running the following command to remove the system dir:"
+echo "    $ sudo rm -Rf $systemPath"
+echo
+read -p "Are you sure you wish to remove $systemPath [yN]? " -n 1 -t 10 GOODTOREMOVE
+echo
+if [ "$GOODTOREMOVE" != "y" -a "$GOODTOREMOVE" != "Y" ]; then
+    echo >&2 "Not removing $systemPath"
+    echo >&2 "User request to abort - $systemPath still exists."
+    exit 0
+fi
+sudo rm -Rf "$systemPath"
+echo "Done."
+
+if [ ! -z "$SYSTEM_SUFFIX" ]; then
+    read -p "Do you wish to move ${systemPath%$SYSTEM_SUFFIX} to ${systemPath} [yN]? " -n 1 -t 10 GOODTOMV
+    echo
+    if [ "$GOODTOMV" = "y" -o "$GOODTOMV" = "Y" ]; then
+        mv ${systemPath%$SYSTEM_SUFFIX} ${systemPath}
+        echo "Moved ${systemPath%$SYSTEM_SUFFIX} to ${systemPath}."
+        echo "Done."
+    fi
+fi
+trap - INT TERM EXIT
