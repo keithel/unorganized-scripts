@@ -1,0 +1,52 @@
+#!/bin/bash
+# To make this 55GB ubuntu/<release>64 VM I did the following:
+
+set -e
+set -u
+
+USERDIR=$PWD
+UBUNTU_RELEASE=xenial64
+VAGRANT_VMNAME=ubuntu-${UBUNTU_RELEASE}-55GB
+if [ -e /tmp/$VAGRANT_VMNAME ]; then
+    echo >&2 "/tmp/$VAGRANT_VMNAME exists!"
+    echo >&2 "Please remove it and re-run to use this script."
+    exit 1
+fi
+
+echo "Making temp directory /tmp/$VAGRANT_VMNAME"
+mkdir -p /tmp/$VAGRANT_VMNAME
+trap "cd /tmp; rm -Rf /tmp/$VAGRANT_VMNAME; exit" INT TERM EXIT
+cd /tmp/$VAGRANT_VMNAME
+echo "Initializing vagrant box ubuntu/${UBUNTU_RELEASE}"
+vagrant init ubuntu/${UBUNTU_RELEASE} > /dev/null
+vagrantfile_backup=$(mktemp Vagrantfile.XXXXXXX.tmp)
+awk '{ print $0 }; /config.vm.box / { print "  config.ssh.insert_key = false"}' Vagrantfile > $vagrantfile_backup
+cat $vagrantfile_backup > Vagrantfile
+rm $vagrantfile_backup
+vagrant_up_outfile=$(mktemp vagrantup.XXXXXXX.out)
+echo "Starting vagrant box ubuntu/${UBUNTU_RELEASE} to initialize the VirtualBox VM"
+vagrant up --no-provision | tee $vagrant_up_outfile
+trap "cd /tmp/$VAGRANT_VMNAME; vagrant destroy -f; cd /tmp; rm -Rf /tmp/$VAGRANT_VMNAME; exit" INT TERM EXIT
+echo "Terminating vagrant box ubuntu/${UBUNTU_RELEASE}"
+vagrant halt
+VMNAME=$(awk '/Setting the name of the VM/ {print $9}' $vagrant_up_outfile)
+VM_PATH="$HOME/VirtualBox VMs/$VMNAME"
+cd "$VM_PATH"
+echo "Cloning virtual disk to VDI format so we can resize it."
+# Duplicate file descriptor 1 to FD 5, so we can both display and capture stdout to a var.
+exec 5>&1
+OUT_VDI_UUID=$(VBoxManage clonehd ubuntu-xenial-16.04-cloudimg.vmdk out.vdi --format VDI | tee >(cat - >&5) | sed -e 's/^.*UUID: \([0-9a-z-][0-9a-z-]*\)$/\1/')
+echo "Resizing VDI disk to 55GB"
+VBoxManage modifyhd out.vdi --resizebyte 59055800320
+echo "Converting VDI disk back to VMDK format"
+VBoxManage clonehd out.vdi ubuntu-xenial-16.04-cloudimg_55gb.vmdk --format VMDK
+echo "Removing intermediate VDI disk"
+VBoxManage closemedium disk ${OUT_VDI_UUID} --delete #rm out.vdi
+echo "Detaching old VMDK disk from the VM and removing it"
+VBoxManage storageattach $VMNAME --storagectl "SCSI Controller" --port 0 --medium none
+VBoxManage closemedium disk ubuntu-xenial-16.04-cloudimg.vmdk --delete #rm ubuntu-xenial-16.04-cloudimg.vmdk
+echo "Attaching the new 55GB VMDK to the VM"
+VBoxManage storageattach $VMNAME --storagectl "SCSI Controller" --port 0 --medium "$VM_PATH/ubuntu-xenial-16.04-cloudimg_55gb.vmdk" --type hdd
+cd /tmp/$VAGRANT_VMNAME
+echo "Packaging up the VM back into a Vagrant box file"
+vagrant package --base $VMNAME --output $USERDIR/${VAGRANT_VMNAME}.box
