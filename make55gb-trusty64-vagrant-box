@@ -32,20 +32,20 @@ VMNAME=$(awk '/Setting the name of the VM/ {print $9}' $vagrant_up_outfile)
 VM_PATH="$HOME/VirtualBox VMs/$VMNAME"
 cd "$VM_PATH"
 echo "Cloning virtual disk to VDI format so we can resize it."
-VBoxManage clonehd box-disk1.vmdk out.vdi --format VDI
+# Duplicate file descriptor 1 to FD 5, so we can both display and capture stdout to a var.
+exec 5>&1
+OUT_VDI_UUID=$(VBoxManage clonehd box-disk1.vmdk out.vdi --format VDI | tee >(cat - >&5) | sed -e 's/^.*UUID: \([0-9a-z-][0-9a-z-]*\)$/\1/')
 echo "Resizing VDI disk to 55GB"
 VBoxManage modifyhd out.vdi --resizebyte 59055800320
 echo "Converting VDI disk back to VMDK format"
-VBoxManage clonehd out.vdi box-disk1_50gb.vmdk --format VMDK
+VBoxManage clonehd out.vdi box-disk1_55gb.vmdk --format VMDK
 echo "Removing intermediate VDI disk"
-rm out.vdi
+VBoxManage closemedium disk ${OUT_VDI_UUID} --delete #rm out.vdi
 echo "Detaching old VMDK disk from the VM and removing it"
 VBoxManage storageattach $VMNAME --storagectl SATAController --port 0 --medium none
-rm box-disk1.vmdk
+VBoxManage closemedium disk box-disk1.vmdk --delete #rm box-disk1.vmdk
 echo "Attaching the new 55GB VMDK to the VM"
-VBoxManage storageattach $VMNAME --storagectl SATAController --port 0 --medium "$VM_PATH/box-disk1_50gb.vmdk" --type hdd
+VBoxManage storageattach $VMNAME --storagectl SATAController --port 0 --medium "$VM_PATH/box-disk1_55gb.vmdk" --type hdd
 cd /tmp/$VAGRANT_VMNAME
 echo "Packaging up the VM back into a Vagrant box file"
 vagrant package --base $VMNAME --output $USERDIR/${VAGRANT_VMNAME}.box
-
-# Note that after this, you will end up with some media files that are registered but "inaccessible" -- notably the 'out.vdi' and 'box-disk1.vmdk' from the original VM.
