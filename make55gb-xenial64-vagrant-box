@@ -23,6 +23,7 @@ vagrantfile_backup=$(mktemp Vagrantfile.XXXXXXX.tmp)
 awk '{ print $0 }; /config.vm.box / { print "  config.ssh.insert_key = false"}' Vagrantfile > $vagrantfile_backup
 cat $vagrantfile_backup > Vagrantfile
 rm $vagrantfile_backup
+vagrant box update
 vagrant_up_outfile=$(mktemp vagrantup.XXXXXXX.out)
 echo "Starting vagrant box ubuntu/${UBUNTU_RELEASE} to initialize the VirtualBox VM"
 vagrant up --no-provision | tee $vagrant_up_outfile
@@ -47,6 +48,7 @@ VBoxManage storageattach $VMNAME --storagectl "SCSI Controller" --port 0 --mediu
 VBoxManage closemedium disk ubuntu-xenial-16.04-cloudimg.vmdk --delete #rm ubuntu-xenial-16.04-cloudimg.vmdk
 echo "Attaching the new 55GB VMDK to the VM"
 VBoxManage storageattach $VMNAME --storagectl "SCSI Controller" --port 0 --medium "$VM_PATH/ubuntu-xenial-16.04-cloudimg_55gb.vmdk" --type hdd
+VBoxManage modifyvm $VMNAME --uartmode1 disconnected
 cd /tmp/$VAGRANT_VMNAME
 echo "Packaging up the VM back into a Vagrant box file"
 vagrant package --base $VMNAME --output $USERDIR/${VAGRANT_VMNAME}.box
