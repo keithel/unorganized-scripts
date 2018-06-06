@@ -1,0 +1,218 @@
+#!/bin/bash
+
+set -e -u
+
+TOOLCHAIN_TARBALL=gcc-linaro-6.3.1-2017.02-x86_64_arm-linux-gnueabihf.tar.xz
+XILINX_VER=2016.3
+VIVADO_TARBALL=vivado_${XILINX_VER}.tar.gz
+XSDK_TARBALL=Xilinx_SDK_${XILINX_VER}.tar.gz
+
+trap "echo 'Script failed'" INT TERM EXIT
+
+function get_labserver_ip()
+{
+#    set +e
+#    sshout=$(ssh -o "ConnectTimeout=3" -o "PasswordAuthentication=No" 192.168.1.12 2>&1)
+#    set -e
+    labserver_ip=192.168.1.12
+#    if [[ ! "$sshout" =~ "Permission denied (publickey,password)." ]]; then
+#        set +e
+#        sshout=$(ssh -o "ConnectTimeout=3" -o "PasswordAuthentication=No" 10.1.10.33 2>&1)
+#        set -e
+#        if [[ ! "$sshout" =~ "Permission denied (publickey,password)." ]]; then
+#            echo >&2 "You are not on a supported network! Please connect to either MIFI1234, MIFI4321, or the L-3 Guest network to continue."
+#            exit 1
+#        fi
+#        labserver_ip=10.1.10.33
+#    fi
+}
+
+function install_toolchain()
+{
+    if [ ! -d "/opt/linaro/toolchains/gcc-linaro-6.3.1-2017.02-x86_64_arm-linux-gnueabihf" ] ; then
+        # Download Linaro toolchain if it's not already downloaded
+        curl -s -O http://${labserver_ip}/downloads/ares2_platform/${TOOLCHAIN_TARBALL}.sha256
+        trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ; exit" INT TERM EXIT
+        set +e ; sha256sum -c ./${TOOLCHAIN_TARBALL}.sha256 >/dev/null 2>&1 ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Downloading Linaro toolchain"
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${TOOLCHAIN_TARBALL} ; exit" INT TERM EXIT
+            curl -O http://${labserver_ip}/downloads/ares2_platform/${TOOLCHAIN_TARBALL}
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ; exit" INT TERM EXIT
+        else
+            echo "Linaro toolchain tarball already present, skipping download."
+        fi
+        echo "Installing Linaro toolchain"
+        sudo mkdir -p /opt/linaro/toolchains
+        sudo tar -C /opt/linaro/toolchains -Jxf ./${TOOLCHAIN_TARBALL}
+        set +e ; grep "export PATH=\"/opt/linaro/toolchains/gcc-linaro-6.3.1-2017.02-x86_64_arm-linux-gnueabihf/bin:\$PATH\"" >/dev/null $HOME/.profile ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Adding toolchain path to the PATH environment var in your .profile"
+            echo "export PATH=\"/opt/linaro/toolchains/gcc-linaro-6.3.1-2017.02-x86_64_arm-linux-gnueabihf/bin:\$PATH\"" >> $HOME/.profile
+        fi
+    fi
+}
+
+function install_vivado()
+{
+    # Download Xilinx Vivado if it's not already downloaded
+    if [ ! -e "/tmp/vivado_${XILINX_VER}/xsetup" ] ; then
+        curl -s -O http://${labserver_ip}/downloads/ares2_platform/${VIVADO_TARBALL}.sha256
+        trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${VIVADO_TARBALL}.sha256 ; exit" INT TERM EXIT
+        set +e ; sha256sum -c ./${VIVADO_TARBALL}.sha256 >/dev/null 2>&1 ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Downloading Xilinx Vivado"
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${VIVADO_TARBALL}.sha256 ${VIVADO_TARBALL} ; exit" INT TERM EXIT
+            curl -O http://${labserver_ip}/downloads/ares2_platform/${VIVADO_TARBALL}
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${VIVADO_TARBALL}.sha256 ; exit" INT TERM EXIT
+        else
+            echo "Xilinx Vivado tarball already present, skipping download."
+        fi
+        tar -C /tmp -zxf ./${VIVADO_TARBALL}
+    else
+        echo "Vivado ${XILINX_VER} installer already present, skipping download and unpack."
+    fi
+
+    if [ ! -e "/opt/Xilinx/SDK/${XILINX_VER}/settings64.sh" ] ; then
+        echo "Installing Vivado ${XILINX_VER}"
+        cat > /tmp/xsetup.config <<- EOCONFIG
+Edition=Vivado HL WebPACK
+Destination=/opt/Xilinx
+Modules=Software Development Kit (SDK):0,DocNav:1,Kintex UltraScale:1,Zynq-7000:1,System Generator for DSP:0,Artix-7:1,Kintex-7:1
+InstallOptions=Acquire or Manage a License Key:0
+CreateProgramGroupShortcuts=1
+ProgramGroupFolder=Xilinx Design Tools
+CreateShortcutsForAllUsers=0
+CreateDesktopShortcuts=1
+CreateFileAssociation=1
+EOCONFIG
+        sudo /tmp/vivado_${XILINX_VER}/xsetup -a XilinxEULA,3rdPartyEULA,WebTalkTerms -b Install -c /tmp/xsetup.config
+        SETTINGS64="/opt/Xilinx/Vivado/${XILINX_VER}/settings64.sh"
+        set +e ; grep "source ${SETTINGS64}" >/dev/null $HOME/.profile ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Adding Vivado settings64.sh to your .profile"
+            echo "source ${SETTINGS64}" >> $HOME/.profile
+        fi
+
+        set +e ; grep "export SWT_GTK3=0" >/dev/null $HOME/.profile ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "export SWT_GTK3=0  # Workaround for Xilinx SDK 2016.3 + Ubuntu 16.04 crasher." >> $HOME/.profile
+        fi
+    fi
+}
+
+function install_vivado_sdk()
+{
+    # Download Xilinx Vivado SDK only if it's not already downloaded
+    if [ ! -e "/tmp/vivado_${XILINX_VER}/xsetup" ] ; then
+        curl -s -O http://${labserver_ip}/downloads/ares2_platform/${VIVADO_TARBALL}.sha256
+        trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${VIVADO_TARBALL}.sha256 ; exit" INT TERM EXIT
+        set +e ; sha256sum -c ./${VIVADO_TARBALL}.sha256 >/dev/null 2>&1 ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Downloading Xilinx Vivado"
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${VIVADO_TARBALL}.sha256 ${VIVADO_TARBALL} ; exit" INT TERM EXIT
+            curl -O http://${labserver_ip}/downloads/ares2_platform/${VIVADO_TARBALL}
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${VIVADO_TARBALL}.sha256 ; exit" INT TERM EXIT
+        else
+            echo "Xilinx Vivado tarball already present, skipping download."
+        fi
+        tar -C /tmp -zxf ./${VIVADO_TARBALL}
+    else
+        echo "Vivado ${XILINX_VER} installer already present, skipping download and unpack."
+    fi
+
+    if [ ! -e "/opt/Xilinx/SDK/${XILINX_VER}/settings64.sh" ] ; then
+        echo "Installing Vivado ${XILINX_VER} SDK only"
+        cat > /tmp/xsetup.config <<- EOCONFIG
+Edition=Vivado HL WebPACK
+Destination=/opt/Xilinx
+Modules=Software Development Kit (SDK):1,DocNav:0,Kintex UltraScale:0,Zynq-7000:0,System Generator for DSP:0,Artix-7:1,Kintex-7:0
+InstallOptions=Acquire or Manage a License Key:0
+CreateProgramGroupShortcuts=1
+ProgramGroupFolder=Xilinx Design Tools
+CreateShortcutsForAllUsers=0
+CreateDesktopShortcuts=1
+CreateFileAssociation=1
+EOCONFIG
+        sudo /tmp/vivado_${XILINX_VER}/xsetup -a XilinxEULA,3rdPartyEULA,WebTalkTerms -b Install -c /tmp/xsetup.config
+        SETTINGS64="/opt/Xilinx/Vivado/${XILINX_VER}/settings64.sh"
+        set +e ; grep "source ${SETTINGS64}" >/dev/null $HOME/.profile ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Adding Vivado settings64.sh to your .profile"
+            echo "source ${SETTINGS64}" >> $HOME/.profile
+        fi
+    fi
+}
+
+function install_xsdk()
+{
+    # Download Xilinx SDK if it's not already downloaded
+    if [ ! -e "/tmp/SDK_${XILINX_VER}/xsetup" ] ; then
+        curl -s -O http://${labserver_ip}/downloads/ares2_platform/${XSDK_TARBALL}.sha256
+        trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${XSDK_TARBALL}.sha256 ; exit" INT TERM EXIT
+        set +e ; sha256sum -c ./${XSDK_TARBALL}.sha256 >/dev/null 2>&1 ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Downloading Xilinx SDK"
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${XSDK_TARBALL}.sha256 ${XSDK_TARBALL} ; exit" INT TERM EXIT
+            curl -O http://${labserver_ip}/downloads/ares2_platform/${XSDK_TARBALL}
+            trap "rm -f ${TOOLCHAIN_TARBALL}.sha256 ${XSDK_TARBALL}.sha256 ; exit" INT TERM EXIT
+        else
+            echo "Xilinx SDK tarball already present, skipping download."
+        fi
+        tar -C /tmp -zxf ./${XSDK_TARBALL}
+    else
+        echo "Xilinx SDK ${XILINX_VER} installer already present, skipping download and unpack."
+    fi
+
+    if [ ! -e "/opt/Xilinx/SDK/${XILINX_VER}/settings64.sh" ] ; then
+        echo "Installing Xilinx SDK ${XILINX_VER}"
+        cat > /tmp/xsdk.config <<- EOCONFIG
+Edition=Xilinx Software Development Kit (XSDK)
+Destination=/opt/Xilinx
+InstallOptions=Enable WebTalk for SDK to send usage statistics to Xilinx:1
+CreateProgramGroupShortcuts=1
+ProgramGroupFolder=Xilinx Design Tools
+CreateShortcutsForAllUsers=0
+CreateDesktopShortcuts=1
+CreateFileAssociation=1
+EOCONFIG
+        sudo /tmp/SDK_${XILINX_VER}/xsetup -a XilinxEULA,3rdPartyEULA,WebTalkTerms -b Install -c /tmp/xsdk.config
+        SETTINGS64="/opt/Xilinx/SDK/${XILINX_VER}/settings64.sh"
+        set +e ; grep "source ${SETTINGS64}" >/dev/null $HOME/.profile ; res=$? ; set -e
+        if [ $res -gt 0 ] ; then
+            echo "Adding XSDK settings64.sh to your .profile"
+            echo "source ${SETTINGS64}" >> $HOME/.profile
+        fi
+    fi
+}
+
+
+
+# Start here
+get_labserver_ip
+
+echo "Adding new apt software repositories"
+sudo add-apt-repository -y ppa:ansible/ansible
+sudo apt-get update
+echo "Installing required Ubuntu packages"
+sudo apt-get -y install ansible debootstrap lib32z1 lib32ncurses5 lib32stdc++6 bc curl
+sudo apt-get -y install build-essential libfontconfig1 mesa-common-dev libglu1-mesa-dev docker-ce
+echo
+install_vivado_sdk
+install_toolchain # Toolchain second so it's first in PATH
+echo "Adding user to docker group"
+sudo usermod -aG docker ${USER}
+
+
+if [ ! -e $HOME/.ssh/id_rsa ] ; then
+    ssh-keygen -q -f $HOME/.ssh/id_rsa -t rsa -N ''
+fi
+echo
+echo "Next you may be prompted to enter your password to the lab server (${labserver_ip})"
+echo "Refer to your post-it note with these credentials if you do not know what they are."
+ssh-copy-id ${labserver_ip} >/dev/null 2>&1
+
+echo
+echo "All done with prerequisite installation. Please log out and log back into your graphical session to continue"
+echo "After that you'll want to run ./createdeb.sh for the standard build or ./docker_start.sh for the docker build"
+set +u
