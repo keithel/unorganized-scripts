@@ -74,10 +74,11 @@ if [ $(uname) == "Darwin" ]; then
     tmpdir=${TMPDIR:-.}
     lldbpy_path=$(mktemp -u $tmpdir/intmt_startup_crashXXXXX)
     echo "lldbpy_path == $lldbpy_path"
-    awk '/[P]LUGH/{p=1; next}p' $0 >${lldbpy_path}.py
+    awk '/[P]LUGH/{p=1; next}p' ${scriptpath}/$(basename $0) >${lldbpy_path}.py
 
-    echo -e "\n\nOnce lldb starts, run:"
+    echo -e "\n\nOnce lldb starts, run the following. A variant without args will be in your clipboard:"
     echo -e "script $(basename ${lldbpy_path}).run(\"arg1\", ..., \"argN\")\n\n"
+    echo -n "script $(basename ${lldbpy_path}).run()" | pbcopy
     rust-lldb -o "command script import ${lldbpy_path}.py" -- ./crash
     #rust-lldb --batch -o run -- ./crash
     exec 2>&4 1>&3
