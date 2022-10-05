@@ -87,7 +87,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        if os.path.isfile("README.pyside6.md"):
+        if os.path.isfile(f"{args.srcdir}/README.pyside6.md"):
             print(pyside_version(args.srcdir))
         else:
             print(qt_version(args.srcdir))
