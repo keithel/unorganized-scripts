@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Module to return the Qt version of a Qt codebase.
 
 This module provides a function that returns the version of a Qt codebase, given
@@ -12,6 +12,7 @@ with the qtbase git submodule cloned and checked out.
 
 from __future__ import print_function # For python2 portability
 import os
+import os.path
 import sys
 import re
 import argparse
@@ -57,15 +58,38 @@ def qt_version(qt5_dir):
 
     return last_version
 
+def pyside_version(pyside_setup_dir):
+    # Fetch version from sources/pyside6/.cmake.conf
+    cmake_conf_path = pyside_setup_dir + "/sources/pyside6/.cmake.conf"
+    if os.path.exists(cmake_conf_path):
+        # PySide6 uses CMake, and we can determine version from .cmake.conf
+        cmake_conf_file = open(cmake_conf_path, 'r')
+
+        regexes = (
+            r"^\s*set\s*\(\s*pyside_MAJOR_VERSION\s*\"([0-9.]*)\"",
+            r"^\s*set\s*\(\s*pyside_MINOR_VERSION\s*\"([0-9.]*)\"",
+            r"^\s*set\s*\(\s*pyside_MICRO_VERSION\s*\"([0-9.]*)\"",
+            r"^\s*set\s*\(\s*pyside_PRE_RELEASE_VERSION_TYPE\s*\"([a-z])\"",
+            r"^\s*set\s*\(\s*pyside_PRE_RELEASE_VERSION\s*\"([0-9]*)\"")
+        version = ["", "", "", "", ""]
+        for line in cmake_conf_file:
+            for (i, regex) in enumerate(regexes):
+                match = re.search(regex, line)
+                if match:
+                    version[i] = match.group(1)
+        return f"{version[0]}.{version[1]}.{version[2]}{version[3]}{version[4]}"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("srcdir", metavar='source-dir', type=str,
                         nargs="?", default=os.getcwd(),
-                        help="Path to the base of a qt5 repository")
+                        help="Path to the base of a qt5 or pyside-setup repository")
     args = parser.parse_args()
 
     try:
-        print(qt_version(args.srcdir))
+        if os.path.isfile("README.pyside6.md"):
+            print(pyside_version(args.srcdir))
+        else:
+            print(qt_version(args.srcdir))
     except FileNotFoundError:
         print("aborting.", file=sys.stderr)
