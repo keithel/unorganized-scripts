@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """Module to return the Qt version of a Qt codebase.
 
 This module provides a function that returns the version of a Qt codebase, given
@@ -14,6 +15,7 @@ import os
 import sys
 import re
 import argparse
+from functools import reduce
 
 def qt_version(qt5_dir):
     """Returns the Qt version of a Qt codebase"""
@@ -38,11 +40,12 @@ def qt_version(qt5_dir):
             # Qt6 uses CMake, and we can determine version from .cmake.conf
             cmake_conf_file = open(cmake_conf_path, 'r')
 
-            qt6_version = ""
-            for line in cmake_conf_file:
-                if "QT_REPO_MODULE_VERSION" in line:
-                    qt6_version = line.split('"')[1]
-                    break
+            regex = r"^\s*set\s*\(\s*QT_REPO_MODULE_VERSION\s*\"([0-9.]*)\""
+            def reduce_func(value, element):
+                match = re.search(regex, element)
+                return match.group(1) if match else value
+
+            qt6_version = reduce(reduce_func, cmake_conf_file, "")
             if qt6_version:
                 versions.append(qt6_version)
 
