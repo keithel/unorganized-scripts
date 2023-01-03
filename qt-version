@@ -17,11 +17,26 @@ import sys
 import re
 import argparse
 from functools import reduce
+from enum import Enum
 
-def print_usage():
-    print("Usage: qt-version [qt or pyside path]", file=sys.stderr)
-    print("Write the Qt or PySide version number of the passed in directory.", file=sys.stderr)
+class Toolkit(Enum):
+    Qt = 1
+    PySide = 2
+    Unknown = 3
+
+def print_usage(toolkit):
+    basename = os.path.basename(sys.argv[0])
+    print(f"Usage: {basename} [{toolkit.name.lower()} path]", file=sys.stderr)
+    print(f"Write the {toolkit.name} version number of the passed in directory.", file=sys.stderr)
     print("If no directory is passed in, the current directory is used.", file=sys.stderr)
+
+def requested_toolkit():
+    base = os.path.basename(sys.argv[0])
+    if base.startswith("qt") or base.startswith("Qt"):
+        return Toolkit.Qt
+    elif base.startswith("pyside") or base.startswith("PySide"):
+        return Toolkit.PySide
+    return Toolkit.Unknown
 
 def qt_version(qt5_dir):
     """Returns the Qt version of a Qt codebase"""
@@ -58,31 +73,35 @@ def qt_version(qt5_dir):
         versions.sort(key=lambda s: list(map(int, s.split('.'))))
         last_version = versions[-1]
     except:
-        print_usage()
+        print_usage(Toolkit.Qt)
         exit(1)
 
     return last_version
 
 def pyside_version(pyside_setup_dir):
     # Fetch version from sources/pyside6/.cmake.conf
-    cmake_conf_path = pyside_setup_dir + "/sources/pyside6/.cmake.conf"
-    if os.path.exists(cmake_conf_path):
-        # PySide6 uses CMake, and we can determine version from .cmake.conf
-        cmake_conf_file = open(cmake_conf_path, 'r')
+    try:
+        cmake_conf_path = pyside_setup_dir + "/sources/pyside6/.cmake.conf"
+        if os.path.exists(cmake_conf_path):
+            # PySide6 uses CMake, and we can determine version from .cmake.conf
+            cmake_conf_file = open(cmake_conf_path, 'r')
 
-        regexes = (
-            r"^\s*set\s*\(\s*pyside_MAJOR_VERSION\s*\"([0-9.]*)\"",
-            r"^\s*set\s*\(\s*pyside_MINOR_VERSION\s*\"([0-9.]*)\"",
-            r"^\s*set\s*\(\s*pyside_MICRO_VERSION\s*\"([0-9.]*)\"",
-            r"^\s*set\s*\(\s*pyside_PRE_RELEASE_VERSION_TYPE\s*\"([a-z])\"",
-            r"^\s*set\s*\(\s*pyside_PRE_RELEASE_VERSION\s*\"([0-9]*)\"")
-        version = ["", "", "", "", ""]
-        for line in cmake_conf_file:
-            for (i, regex) in enumerate(regexes):
-                match = re.search(regex, line)
-                if match:
-                    version[i] = match.group(1)
-        return f"{version[0]}.{version[1]}.{version[2]}{version[3]}{version[4]}"
+            regexes = (
+                r"^\s*set\s*\(\s*pyside_MAJOR_VERSION\s*\"([0-9.]*)\"",
+                r"^\s*set\s*\(\s*pyside_MINOR_VERSION\s*\"([0-9.]*)\"",
+                r"^\s*set\s*\(\s*pyside_MICRO_VERSION\s*\"([0-9.]*)\"",
+                r"^\s*set\s*\(\s*pyside_PRE_RELEASE_VERSION_TYPE\s*\"([a-z])\"",
+                r"^\s*set\s*\(\s*pyside_PRE_RELEASE_VERSION\s*\"([0-9]*)\"")
+            version = ["", "", "", "", ""]
+            for line in cmake_conf_file:
+                for (i, regex) in enumerate(regexes):
+                    match = re.search(regex, line)
+                    if match:
+                        version[i] = match.group(1)
+            return f"{version[0]}.{version[1]}.{version[2]}{version[3]}{version[4]}"
+    except FileNotFoundError:
+        print_usage(Toolkit.PySide)
+        sys.exit(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -90,12 +109,15 @@ if __name__ == "__main__":
                         nargs="?", default=os.getcwd(),
                         help="Path to the base of a qt5 or pyside-setup repository")
     args = parser.parse_args()
-
-    try:
+    toolkit = requested_toolkit()
+    if toolkit == Toolkit.Qt:
+        print(qt_version(args.srcdir))
+    elif toolkit == Toolkit.PySide:
         if os.path.isfile(f"{args.srcdir}/README.pyside6.md"):
             print(pyside_version(args.srcdir))
         else:
-            print(qt_version(args.srcdir))
-    except FileNotFoundError:
-        print_usage()
-        sys.exit(1)
+            print_usage(Toolkit.PySide)
+            exit(1)
+    else:
+        print(f"error: Unknown product from which to fetch version.")
+        sys.exit(2)
