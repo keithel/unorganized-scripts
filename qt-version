@@ -18,6 +18,11 @@ import re
 import argparse
 from functools import reduce
 
+def print_usage():
+    print("Usage: qt-version [qt or pyside path]", file=sys.stderr)
+    print("Write the Qt or PySide version number of the passed in directory.", file=sys.stderr)
+    print("If no directory is passed in, the current directory is used.", file=sys.stderr)
+
 def qt_version(qt5_dir):
     """Returns the Qt version of a Qt codebase"""
 
@@ -53,8 +58,8 @@ def qt_version(qt5_dir):
         versions.sort(key=lambda s: list(map(int, s.split('.'))))
         last_version = versions[-1]
     except:
-        print("qtbase doesn't exist. Please pass the path to a qt5 repo.", file=sys.stderr)
-        raise
+        print_usage()
+        exit(1)
 
     return last_version
 
@@ -92,4 +97,5 @@ if __name__ == "__main__":
         else:
             print(qt_version(args.srcdir))
     except FileNotFoundError:
-        print("aborting.", file=sys.stderr)
+        print_usage()
+        sys.exit(1)
