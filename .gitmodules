@@ -1,0 +1,3 @@
+[submodule "york-property-tax"]
+	path = york-property-tax
+	url = ../york-property-tax-tools.git
