@@ -1,0 +1,49 @@
+#!/bin/bash
+
+usage="Please provide an animated gif."
+[[ $# -gt 0 ]] || { echo -e "Error: No arguments provided.\n\n$usage"; exit 1; }
+[[ $# -le 1 ]] || { echo -e "Error: Too many arguments provided.\n\n$usage"; exit 1; }
+[[ -f $1 ]] || { echo -e "Error: No path to file provided.\n\n$usage"; exit 1; }
+convert -version >/dev/null 2>&1 || { echo -e "Error: Imagemagick seems not to be installed.\n\nPlease install ImageMagick and ensure it is in the PATH."; exit 1; }
+
+fn=$(basename $1)
+dn=$(readlink -f $(dirname $1))
+set -- "$dn/$fn"
+
+tmpdir=$(mktemp -d)
+
+ORIGPWD=$PWD
+cd $tmpdir
+echo -n "Processing animated gif $1"
+convert $1 +adjoin %02d
+echo -n "...removing odd frames"
+firstframe=-1
+lastframes=""
+for framefn in $(ls -1v); do
+    # Strip leading zeroes
+    frame_num=$((10#$framefn))
+    if (( firstframe == -1 )); then
+        firstframe=$framefn
+    elif (( frame_num % 2 == 0 )); then
+        lastframes="$lastframes $framefn"
+    fi
+    if (( frame_num % 2 == 1 )); then
+        rm $framefn
+    fi
+done
+echo -n "...getting frame delay"
+#size=$(identify -verbose $1 | grep -m 1 Geometry | awk '{gsub(/+.*/,"",$2); print $2}')
+#colorspace=$(identify -verbose $1 | grep -m 1 Colorspace | awk '{print $2}')
+delay=$(identify -verbose $1 | grep -m 3 Delay | tail -1 | awk '{gsub(/x.*/,"",$2); print $2}')
+delay=$((delay*2))
+
+echo "...writing result."
+#echo "size $size, colorspace $colorspace, delay $delay"
+result_path="$ORIGPWD/${fn%.*}-dec.gif"
+convert -dispose none -delay 0 $firstframe -dispose previous -delay $delay $lastframes "$result_path"
+#convert -dispose none -delay 0 -background black -colorspace $colorspace -size $size xc:black -dispose background -delay $delay $firstframe -dispose previous -delay $delay $lastframes "$result_path"
+echo "Output is in $result_path"
+
+cd $ORIGPWD
+#echo "frames are stored in $tmpdir"
+rm -Rf $tmpdir
