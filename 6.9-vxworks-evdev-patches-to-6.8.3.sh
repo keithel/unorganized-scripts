@@ -12,11 +12,11 @@ fi
 set -e
 gitlogbranch=$(git log -1 --oneline --decorate=short)
 case $gitlogbranch in
-    *"-> origin/6.8)"*)
+    *"-> origin/6.8.3)"*)
         ;;
-    *", origin/6.8,"*)
+    *", origin/6.8.3,"*)
         ;;
-    *", origin/6.8)"*)
+    *", origin/6.8.3)"*)
         ;;
     *)
         echo >&2 "Please be on a new branch that is positioned at the tip of the origin/6.8 branch"
@@ -58,11 +58,13 @@ cherry_pick_commits="
     1d0ec32f71e
     1c7e72c8eba
     d5d67a7976d
+    3bd189ab7b6cda5ee9f7b91178a8ad41fa7badc5
     6d49bd766f3
     35f0560a2d4
     3dc86e804bd
     ee912e89ba1
     156752917d7
+    5e95e2df615d160666ce567705b60d39ededfc6f
     4ac20b3e5ae
 "
 for cherrypick in $cherry_pick_commits; do
@@ -82,3 +84,10 @@ for cherrypick in $cherry_pick_commits; do
         git cherry-pick $cherrypick
     fi
 done
+
+# Fix build for a small issue after cherry-picks:
+# Q_STATIC_LOGGING_CATEGORY incomplete in Qt 6.8, so use Q_LOGGING_CATEGORY
+static_logging_category_error_files="src/platformsupport/devicediscovery/qdevicediscovery_vxworks.cpp src/platformsupport/input/vxkeyboard/qvxkeyboardhandler.cpp src/platformsupport/input/vxtouch/qvxtouchhandler.cpp"
+sed -i -e 's/Q_STATIC_LOGGING_CATEGORY/Q_LOGGING_CATEGORY/' $static_logging_category_error_files
+git add src/platformsupport $static_logging_category_error_files
+git commit -m "Q_STATIC_LOGGING_CATEGORY incomplete in Qt 6.8, so use Q_LOGGING_CATEGORY"
