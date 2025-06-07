@@ -27,26 +27,57 @@ def run_xrandr():
         # print(f"Stderr: {e.stderr}") # Uncomment for more detailed error debugging
         return None
 
-def get_xrandr_connected_displays_and_primary(xrandr_output):
+def parse_xrandr_details(xrandr_output):
     """
-    Parses xrandr output to get a set of connected display IDs
-    and the primary display ID.
+    Parses xrandr output to get:
+    - Set of connected display IDs
+    - Primary display ID
+    - Dictionary of xrandr-reported resolutions (from the 'connected' line)
+    - Dictionary of xrandr-actual resolutions (from the '*' line)
     """
     connected_ids = set()
     primary_id = None
+    xrandr_reported_resolutions = {} # Resolution from the 'connected' line
+    xrandr_actual_resolutions = {} # Resolution with the '*'
 
     if not xrandr_output:
-        return connected_ids, primary_id
+        return connected_ids, primary_id, xrandr_reported_resolutions, xrandr_actual_resolutions
 
     lines = xrandr_output.splitlines()
-    for line in lines:
-        match_connected = re.match(r'\s*(\S+)\s+connected(?:\s+primary)?\s+.*', line)
+    current_display_id = None
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Match connected displays (e.g., DP-2 connected primary 5120x2880+0+0)
+        match_connected = re.match(r'\s*(\S+)\s+connected(?:\s+primary)?\s+(\d+x\d+)\+.*', line)
         if match_connected:
-            display_id = match_connected.group(1)
-            connected_ids.add(display_id)
+            current_display_id = match_connected.group(1)
+            connected_ids.add(current_display_id)
+            xrandr_reported_resolutions[current_display_id] = match_connected.group(2) # Resolution from the 'connected' line
+
             if "connected primary" in line:
-                primary_id = display_id
-    return connected_ids, primary_id
+                primary_id = current_display_id
+
+            # Look for the actual (starred) resolution in subsequent lines
+            j = i + 1
+            while j < len(lines):
+                sub_line = lines[j]
+                if sub_line.startswith(' ') or sub_line.startswith('\t'): # It's a mode line
+                    res_match = re.search(r'^\s*(\d+x\d+)(?:(?:\s\+)?\s+\d+\.\d+)*\*', sub_line)
+                    if res_match:
+                        xrandr_actual_resolutions[current_display_id] = res_match.group(1)
+                        break # Found the actual resolution for this monitor
+                else:
+                    # Not indented, means we've moved to the next display or a new section
+                    break
+                j += 1
+            i = j # Move outer loop pointer to avoid re-processing lines
+        else:
+            i += 1 # Move to next line in outer loop
+
+    return connected_ids, primary_id, xrandr_reported_resolutions, xrandr_actual_resolutions
 
 # --- Function to parse monitors.xml for the ACTIVE configuration ---
 def parse_active_monitors_xml_config(xml_path, connected_xrandr_ids):
@@ -74,9 +105,9 @@ def parse_active_monitors_xml_config(xml_path, connected_xrandr_ids):
                 current_monitor_info = {
                     'id': None,
                     'is_primary': False, # Will be set by xrandr later
-                    'actual_display_resolution': None,
-                    'logical_resolution': None,
-                    'gnome_scale_factor': None
+                    'actual_display_resolution': None, # From XML's <mode>
+                    'logical_resolution': None,        # Calculated using XML's <scale>
+                    'gnome_scale_factor': None         # From XML's <scale>
                 }
 
                 monitor_element = logical_monitor.find('monitor')
@@ -87,11 +118,6 @@ def parse_active_monitors_xml_config(xml_path, connected_xrandr_ids):
 
                 connector_element = monitorspec_element.find('connector')
                 if connector_element is not None and connector_element.text:
-                    # If we encounter a monitor ID that isn't in the connected
-                    # IDs, break out of logical_monitor loop, no need to
-                    # continue searching.
-                    if not connector_element.text in connected_xrandr_ids:
-                        break
                     current_monitor_info['id'] = connector_element.text
                     config_connectors.add(current_monitor_info['id'])
 
@@ -129,9 +155,8 @@ def parse_active_monitors_xml_config(xml_path, connected_xrandr_ids):
                     logical_monitors_in_config.append(current_monitor_info)
 
             # Check if this configuration matches the currently connected xrandr displays
-            # A perfect match means all connectors in config are connected AND all connected are in config
             if config_connectors == connected_xrandr_ids:
-                return logical_monitors_in_config
+                return logical_monitors_in_config # Found the active configuration!
 
     except ET.ParseError as e:
         print(f"Error parsing monitors.xml: {e}")
@@ -140,28 +165,18 @@ def parse_active_monitors_xml_config(xml_path, connected_xrandr_ids):
     return [] # No matching active configuration found in monitors.xml
 
 # --- Fallback for monitors only detected by xrandr ---
-def get_xrandr_only_monitor_info(xrandr_output, display_id, primary_id):
+def get_xrandr_only_monitor_info(display_id, primary_id, xrandr_reported_resolutions, xrandr_actual_resolutions):
     """
-    Parses xrandr output to get basic info for a specific display_id.
-    Used for monitors connected but not found in the active monitors.xml config.
+    Constructs basic info for a monitor connected via xrandr but not found in active XML config.
     """
-    if not xrandr_output:
-        return None
-
-    lines = xrandr_output.splitlines()
-    for line in lines:
-        match_connected = re.match(rf'\s*{re.escape(display_id)}\s+connected(?:\s+primary)?\s+(\d+x\d+)\+.*', line)
-        if match_connected:
-            logical_resolution_str = match_connected.group(1) # xrandr's current res is the "logical" from its view
-
-            return {
-                'id': display_id,
-                'is_primary': (display_id == primary_id),
-                'actual_display_resolution': logical_resolution_str, # Best guess for actual from xrandr
-                'logical_resolution': logical_resolution_str, # Assume 1x scale if not in XML
-                'gnome_scale_factor': '1.0x (xrandr detected only)'
-            }
-    return None
+    return {
+        'id': display_id,
+        'is_primary': (display_id == primary_id),
+        'actual_display_resolution': xrandr_actual_resolutions.get(display_id, "N/A"), # Best guess for actual
+        'logical_resolution': xrandr_reported_resolutions.get(display_id, "N/A"), # xrandr's connected resolution
+        'gnome_scale_factor': '1.0x (xrandr detected only)',
+        'xrandr_reported_resolution': xrandr_reported_resolutions.get(display_id, "N/A") # The requested xrandr reported res
+    }
 
 def main():
     parser = argparse.ArgumentParser(description="Query connected Xorg displays and their resolutions.")
@@ -176,39 +191,42 @@ def main():
     )
     args = parser.parse_args()
 
-    # Get connected displays and primary from xrandr
+    # Step 1: Get comprehensive xrandr details (connected status, primary, and reported resolutions)
     xrandr_output = run_xrandr()
     if not xrandr_output:
         print("Cannot get display information. Ensure Xorg is running and xrandr is installed.")
         return
 
-    connected_xrandr_ids, primary_display_id = get_xrandr_connected_displays_and_primary(xrandr_output)
+    connected_xrandr_ids, primary_display_id, \
+    xrandr_reported_resolutions, xrandr_actual_resolutions = parse_xrandr_details(xrandr_output)
 
-    # Parse monitors.xml for the active configuration
+    # Step 2: Parse monitors.xml for the ACTIVE configuration
     monitors_xml_path = os.path.expanduser("~/.config/monitors.xml")
     monitors_from_active_config = parse_active_monitors_xml_config(monitors_xml_path, connected_xrandr_ids)
 
     final_monitors_list = []
 
-    # Populate final_monitors_list with data from the active XML configuration
+    # Step 3: Combine data: Prioritize monitors.xml data for connected displays
     if monitors_from_active_config:
         for xml_monitor_info in monitors_from_active_config:
             # Mark primary status based on xrandr's determination
             xml_monitor_info['is_primary'] = (xml_monitor_info['id'] == primary_display_id)
+            # Add xrandr's reported resolution
+            xml_monitor_info['xrandr_reported_resolution'] = xrandr_reported_resolutions.get(xml_monitor_info['id'], "N/A")
             final_monitors_list.append(xml_monitor_info)
 
-    # Add any connected monitors that were NOT found in the active monitors.xml config
-    # This handles cases where monitors.xml might not have the *exact* current configuration
-    # or if a new monitor is connected that hasn't been saved to XML yet.
+    # Step 4: Add any connected monitors that were NOT found in the active monitors.xml config
     xml_ids_in_final_list = {m['id'] for m in final_monitors_list}
     for xrandr_id in connected_xrandr_ids:
         if xrandr_id not in xml_ids_in_final_list:
-            xrandr_only_info = get_xrandr_only_monitor_info(xrandr_output, xrandr_id, primary_display_id)
+            # Get basic info from xrandr for this connected-only monitor
+            xrandr_only_info = get_xrandr_only_monitor_info(xrandr_id, primary_display_id,
+                                                            xrandr_reported_resolutions, xrandr_actual_resolutions)
             if xrandr_only_info:
                 final_monitors_list.append(xrandr_only_info)
 
     # Sort the final list for consistent output
-    #final_monitors_list.sort(key=lambda m: m['id'])
+    final_monitors_list.sort(key=lambda m: m['id'])
 
     if args.primary:
         if primary_display_id:
@@ -223,31 +241,33 @@ def main():
             if monitor['id'] == args.display:
                 print(f"Display: {monitor['id']}")
                 print(f"  Configured/Actual Resolution: {monitor['actual_display_resolution']}")
-                print(f"  Logical/Rendered Resolution: {monitor['logical_resolution']}")
+                print(f"  Logical/Rendered Resolution (Gnome): {monitor['logical_resolution']}")
                 print(f"  Gnome UI Scale Factor: {monitor['gnome_scale_factor']}")
+                print(f"  XRANDR Reported Resolution: {monitor['xrandr_reported_resolution']}") # New line
                 found = True
                 break
         if not found:
             print(f"Error: Display '{args.display}' not found or not currently connected.")
-            print("Note: This script assumes you're using Xorg. If you are on Wayland, ~/.config/monitors.xml may not contain active configuration.")
+            print("Note: This script is most accurate for Xorg sessions. If you are on Wayland, ~/.config/monitors.xml may not contain active configuration.")
         return
 
     # Default output if no specific arguments are given
     if not final_monitors_list:
         print("No connected displays found.")
-        print("Note: This script assumes you're using Xorg.")
+        print("Note: This script is most accurate for Xorg sessions.")
         return
 
+    print("---")
     print("Currently Connected Displays:")
-    print()
+    print("---")
     for monitor in final_monitors_list:
         status = "(Primary)" if monitor['is_primary'] else ""
         print(f"  ID: {monitor['id']} {status}")
-        # Name is typically just the ID for monitors.xml, but keeping structure consistent
         print(f"    Configured/Actual Resolution: {monitor['actual_display_resolution']}")
-        print(f"    Logical/Rendered Resolution: {monitor['logical_resolution']}")
+        print(f"    Logical/Rendered Resolution (Gnome): {monitor['logical_resolution']}")
         print(f"    Gnome UI Scale Factor: {monitor['gnome_scale_factor']}")
-        print("-" * 20)
+        print(f"    XRANDR Reported Resolution: {monitor['xrandr_reported_resolution']}") # New line
+        print("-" * 20) # Separator for individual monitors
 
     if primary_display_id:
         print(f"\nPrimary Display ID: {primary_display_id}")
