@@ -3,9 +3,11 @@ import re
 import argparse
 import os
 import xml.etree.ElementTree as ET
+from typing import List, Dict, Optional, Tuple, Set
 
-# --- Helper to run xrandr ---
-def run_xrandr():
+# --- Internal Helper Functions (prefixed with _) ---
+
+def _run_xrandr() -> Optional[str]:
     """Runs the xrandr command and returns its output."""
     try:
         current_env = os.environ.copy()
@@ -27,7 +29,7 @@ def run_xrandr():
         # print(f"Stderr: {e.stderr}") # Uncomment for more detailed error debugging
         return None
 
-def parse_xrandr_details(xrandr_output):
+def _parse_xrandr_details(xrandr_output: str) -> Tuple[Set[str], Optional[str], Dict[str, str], Dict[str, str]]:
     """
     Parses xrandr output to get:
     - Set of connected display IDs
@@ -79,8 +81,7 @@ def parse_xrandr_details(xrandr_output):
 
     return connected_ids, primary_id, xrandr_reported_resolutions, xrandr_actual_resolutions
 
-# --- Function to parse monitors.xml for the ACTIVE configuration ---
-def parse_active_monitors_xml_config(xml_path, connected_xrandr_ids):
+def _parse_active_monitors_xml_config(xml_path: str, connected_xrandr_ids: Set[str]) -> List[Dict]:
     """
     Parses ~/.config/monitors.xml to find the active configuration
     based on currently connected xrandr display IDs, and extracts info.
@@ -164,8 +165,7 @@ def parse_active_monitors_xml_config(xml_path, connected_xrandr_ids):
 
     return [] # No matching active configuration found in monitors.xml
 
-# --- Fallback for monitors only detected by xrandr ---
-def get_xrandr_only_monitor_info(display_id, primary_id, xrandr_reported_resolutions, xrandr_actual_resolutions):
+def _get_xrandr_only_monitor_info(display_id: str, primary_id: Optional[str], xrandr_reported_resolutions: Dict[str, str], xrandr_actual_resolutions: Dict[str, str]) -> Dict:
     """
     Constructs basic info for a monitor connected via xrandr but not found in active XML config.
     """
@@ -177,6 +177,76 @@ def get_xrandr_only_monitor_info(display_id, primary_id, xrandr_reported_resolut
         'gnome_scale_factor': '1.0x (xrandr detected only)',
         'xrandr_reported_resolution': xrandr_reported_resolutions.get(display_id, "N/A") # The requested xrandr reported res
     }
+
+# --- Public API Function ---
+
+def get_display_info() -> List[Dict]:
+    """
+    Retrieves detailed information about currently connected Xorg displays,
+    combining data from ~/.config/monitors.xml and xrandr.
+
+    This function performs the core logic of gathering display information
+    without handling command-line arguments or printing output directly.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents a connected monitor
+        with the following keys:
+        - 'id' (str): The display connector ID (e.g., 'DP-2', 'eDP-1').
+        - 'is_primary' (bool): True if this is the primary display.
+        - 'actual_display_resolution' (str): The physical resolution reported by
+          monitors.xml's <mode> (if available) or xrandr's starred resolution.
+        - 'logical_resolution' (str): The logical/rendered resolution calculated
+          based on Gnome's UI scale factor from monitors.xml.
+        - 'gnome_scale_factor' (str): Gnome's configured UI scale factor (e.g., '1.2x', '1.5x').
+        - 'xrandr_reported_resolution' (str): The resolution xrandr reports on its
+          'connected' line, which is often its own logical resolution (e.g., '1920x1080').
+
+        For monitors found only by xrandr (not in monitors.xml),
+        'gnome_scale_factor' will be '1.0x (xrandr detected only)' and
+        'logical_resolution' will be the same as 'xrandr_reported_resolution'.
+        Returns an empty list if no display information can be retrieved.
+    """
+    # Get comprehensive xrandr details (connected status, primary, and reported resolutions)
+    xrandr_output = _run_xrandr()
+    if not xrandr_output:
+        return [] # Cannot proceed without xrandr output
+
+    connected_xrandr_ids, primary_display_id, \
+    xrandr_reported_resolutions, xrandr_actual_resolutions = _parse_xrandr_details(xrandr_output)
+
+    # Parse monitors.xml for the ACTIVE configuration
+    monitors_xml_path = os.path.expanduser("~/.config/monitors.xml")
+    monitors_from_active_config = _parse_active_monitors_xml_config(monitors_xml_path, connected_xrandr_ids)
+
+    final_monitors_list = []
+
+    # Combine data: Prioritize monitors.xml data for connected displays
+    if monitors_from_active_config:
+        for xml_monitor_info in monitors_from_active_config:
+            # Mark primary status based on xrandr's determination
+            xml_monitor_info['is_primary'] = (xml_monitor_info['id'] == primary_display_id)
+            # Add xrandr's reported resolution
+            xml_monitor_info['xrandr_reported_resolution'] = xrandr_reported_resolutions.get(xml_monitor_info['id'], "N/A")
+            # If actual_display_resolution from XML is N/A, try to use xrandr_actual_resolutions
+            if xml_monitor_info['actual_display_resolution'] is None or xml_monitor_info['actual_display_resolution'] == "N/A":
+                xml_monitor_info['actual_display_resolution'] = xrandr_actual_resolutions.get(xml_monitor_info['id'], "N/A")
+            final_monitors_list.append(xml_monitor_info)
+
+    # Add any connected monitors that were NOT found in the active monitors.xml config
+    xml_ids_in_final_list = {m['id'] for m in final_monitors_list}
+    for xrandr_id in connected_xrandr_ids:
+        if xrandr_id not in xml_ids_in_final_list:
+            # Get basic info from xrandr for this connected-only monitor
+            xrandr_only_info = _get_xrandr_only_monitor_info(xrandr_id, primary_display_id,
+                                                            xrandr_reported_resolutions, xrandr_actual_resolutions)
+            if xrandr_only_info:
+                final_monitors_list.append(xrandr_only_info)
+
+    # Sort the final list for consistent output
+    final_monitors_list.sort(key=lambda m: m['id'])
+    return final_monitors_list
+
+# --- Command-line execution logic (only runs when script is executed directly) ---
 
 def main():
     parser = argparse.ArgumentParser(description="Query connected Xorg displays and their resolutions.")
@@ -196,52 +266,20 @@ def main():
     )
     args = parser.parse_args()
 
-    # Step 1: Get comprehensive xrandr details (connected status, primary, and reported resolutions)
-    xrandr_output = run_xrandr()
-    if not xrandr_output:
-        print("Cannot get display information. Ensure Xorg is running and xrandr is installed.")
+    # Call the public API function to get display information
+    all_display_info = get_display_info()
+
+    if not all_display_info and not args.xrandr_logical_res:
+        print("No connected displays found.")
+        print("Note: This script is most accurate for Xorg sessions.")
         return
-
-    connected_xrandr_ids, primary_display_id, \
-    xrandr_reported_resolutions, xrandr_actual_resolutions = parse_xrandr_details(xrandr_output)
-
-    # Step 2: Parse monitors.xml for the ACTIVE configuration
-    monitors_xml_path = os.path.expanduser("~/.config/monitors.xml")
-    monitors_from_active_config = parse_active_monitors_xml_config(monitors_xml_path, connected_xrandr_ids)
-
-    final_monitors_list = []
-
-    # Step 3: Combine data: Prioritize monitors.xml data for connected displays
-    if monitors_from_active_config:
-        for xml_monitor_info in monitors_from_active_config:
-            # Mark primary status based on xrandr's determination
-            xml_monitor_info['is_primary'] = (xml_monitor_info['id'] == primary_display_id)
-            # Add xrandr's reported resolution
-            xml_monitor_info['xrandr_reported_resolution'] = xrandr_reported_resolutions.get(xml_monitor_info['id'], "N/A")
-            # If actual_display_resolution from XML is N/A, try to use xrandr_actual_resolutions
-            if xml_monitor_info['actual_display_resolution'] is None or xml_monitor_info['actual_display_resolution'] == "N/A":
-                xml_monitor_info['actual_display_resolution'] = xrandr_actual_resolutions.get(xml_monitor_info['id'], "N/A")
-            final_monitors_list.append(xml_monitor_info)
-
-    # Step 4: Add any connected monitors that were NOT found in the active monitors.xml config
-    xml_ids_in_final_list = {m['id'] for m in final_monitors_list}
-    for xrandr_id in connected_xrandr_ids:
-        if xrandr_id not in xml_ids_in_final_list:
-            # Get basic info from xrandr for this connected-only monitor
-            xrandr_only_info = get_xrandr_only_monitor_info(xrandr_id, primary_display_id,
-                                                            xrandr_reported_resolutions, xrandr_actual_resolutions)
-            if xrandr_only_info:
-                final_monitors_list.append(xrandr_only_info)
-
-    # Sort the final list for consistent output
-    final_monitors_list.sort(key=lambda m: m['id'])
 
     # --- Handle new --xrandr-logical-res option ---
     if args.xrandr_logical_res:
         if args.display:
             # If -d is also specified, print only for that display
             found = False
-            for monitor in final_monitors_list:
+            for monitor in all_display_info:
                 if monitor['id'] == args.display:
                     print(monitor['xrandr_reported_resolution'])
                     found = True
@@ -252,11 +290,13 @@ def main():
 
         else:
             # Print xrandr logical resolution for all connected displays
-            for monitor in final_monitors_list:
+            for monitor in all_display_info:
                 print(f"{monitor['id']}: {monitor['xrandr_reported_resolution']}")
             return # Exit after printing
 
     # --- Standard output logic (if --xrandr-logical-res is NOT used) ---
+    primary_display_id = next((m['id'] for m in all_display_info if m['is_primary']), None)
+
     if args.primary:
         if primary_display_id:
             print(f"Primary Display: {primary_display_id}")
@@ -266,7 +306,7 @@ def main():
 
     if args.display:
         found = False
-        for monitor in final_monitors_list:
+        for monitor in all_display_info:
             if monitor['id'] == args.display:
                 print(f"Display: {monitor['id']}")
                 print(f"  Configured/Actual Resolution: {monitor['actual_display_resolution']}")
@@ -281,15 +321,10 @@ def main():
         return
 
     # Default output if no specific arguments are given
-    if not final_monitors_list:
-        print("No connected displays found.")
-        print("Note: This script is most accurate for Xorg sessions.")
-        return
-
     print("---")
     print("Currently Connected Displays:")
     print("---")
-    for monitor in final_monitors_list:
+    for monitor in all_display_info:
         status = "(Primary)" if monitor['is_primary'] else ""
         print(f"  ID: {monitor['id']} {status}")
         print(f"    Configured/Actual Resolution: {monitor['actual_display_resolution']}")
