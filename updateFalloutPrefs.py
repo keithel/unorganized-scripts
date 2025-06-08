@@ -3,11 +3,13 @@ import re
 import argparse
 import sys
 import displayres
+import math
 
 # --- Constants for path detection ---
 FALLOUT_NV_APP_ID = "22380"
 # Relative path from the 'steamapps' directory to FalloutPrefs.ini for Proton/Wine installs
-FALLOUT_NV_INI_RELATIVE_PATH = f"compatdata/{FALLOUT_NV_APP_ID}/pfx/drive_c/users/steamuser/My Documents/My Games/FalloutNV/FalloutPrefs.ini"
+FALLOUT_NV_INI_RELATIVE_PATH = (f"compatdata/{FALLOUT_NV_APP_ID}/pfx/drive_c/users/steamuser/"
+                                "My Documents/My Games/FalloutNV/FalloutPrefs.ini")
 
 def find_steam_root(user_steam_path=None):
     """
@@ -18,7 +20,8 @@ def find_steam_root(user_steam_path=None):
                                          e.g., ~/.local/share/Steam or ~/.steam/steam.
 
     Returns:
-        str or None: The absolute path to the Steam root directory if found and valid, otherwise None.
+        str or None: The absolute path to the Steam root directory if found and valid, otherwise
+        None.
     """
     potential_roots = []
 
@@ -72,11 +75,15 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
         force_write (bool): If True, changes will be written to the file without confirmation.
         show_changes (bool): If True, the proposed file content will be printed to stdout.
     """
+
+    logfile=sys.stderr if show_changes else sys.stdout
     try:
         display_info = displayres.get_display_info()
     except AttributeError:
-        print("Error: The 'displayres' module or 'get_display_info' function was not found.", file=sys.stderr)
-        print("Please ensure 'displayres.py' is in your PYTHONPATH and contains 'get_display_info()'.", file=sys.stderr)
+        print("Error: The 'displayres' module or 'get_display_info' function was not found.",
+              file=sys.stderr)
+        print("Please ensure 'displayres.py' is in your PYTHONPATH and contains "
+              "'get_display_info()'.", file=sys.stderr)
         return
 
     primary_display = None
@@ -90,19 +97,25 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
         return
 
     xrandr_reported_width, xrandr_reported_height = primary_display['xrandr_reported_resolution']
-    print(f"Primary display xrandr_reported_resolution: {xrandr_reported_width}x{xrandr_reported_height}", file=sys.stderr)
+    scalefactor = float(primary_display['gnome_scale_factor'][:-1])
+    print(f"Primary display xrandr_reported_resolution: "
+          "{xrandr_reported_width}x{xrandr_reported_height}", file=logfile)
+    print(f"scalefactor: {scalefactor}", file=logfile)
 
     # Window manager titlebar: 64 pixels
     # Window titlebar: 75 pixels
     # Total effective titlebar height: 64 + 75 = 139 pixels
-    TITLEBAR_HEIGHT = 139 # Sum of window manager titlebar (64) + window titlebar (75)
-    BORDER_HEIGHT = 2     # Height for bottom window border
-    BORDER_WIDTH = 1      # Width for left/right window borders (each)
+    # This is for scalefactor > 1
+    TITLEBAR_HEIGHT = 139.0/2 # Sum of window manager titlebar (64) + window titlebar (75)
+    BORDER_HEIGHT = 2.0/2     # Height for bottom window border
+    BORDER_WIDTH = 1.0/2      # Width for left/right window borders (each)
 
-    adjusted_width = xrandr_reported_width - BORDER_WIDTH*2
-    adjusted_height = xrandr_reported_height - TITLEBAR_HEIGHT - BORDER_HEIGHT
+    adjusted_width = int(round(xrandr_reported_width - (BORDER_WIDTH*2)*math.ceil(scalefactor)))
+    adjusted_height = int(round(xrandr_reported_height - (TITLEBAR_HEIGHT + BORDER_HEIGHT) *
+                                math.ceil(scalefactor)))
 
-    print(f"Adjusted resolution for Fallout New Vegas: {adjusted_width}x{adjusted_height}", file=sys.stderr)
+    print(f"Adjusted resolution for Fallout New Vegas: {adjusted_width}x{adjusted_height}",
+          file=logfile)
 
     if not os.path.exists(fallout_prefs_path):
         print(f"Error: FalloutPrefs.ini not found at {fallout_prefs_path}", file=sys.stderr)
@@ -115,8 +128,8 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
     in_display_section = False
     i_size_w_found = False
     i_size_h_found = False
-    dirty = False
-    changes_summary = []
+    dirty = False # Indicates if any changes are made in memory
+    changes_summary = [] # List to store "before -> after" change descriptions
 
     for i, line in enumerate(lines):
         if re.match(r'\[Display\]', line.strip()):
@@ -137,7 +150,8 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
                         dirty = True
                         changes_summary.append(f"iSize W: {current_val} -> {adjusted_width}")
                         if show_changes:
-                            print(f"Proposed: Change line {i+1}: '{line.strip()}' to 'iSize W={adjusted_width}'", file=sys.stderr)
+                            print(f"Proposed: Change line {i+1}: '{line.strip()}' to "
+                                  "'iSize W={adjusted_width}'", file=logfile)
                     else:
                         modified_lines.append(line)
                 else:
@@ -152,7 +166,8 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
                         dirty = True
                         changes_summary.append(f"iSize H: {current_val} -> {adjusted_height}")
                         if show_changes:
-                            print(f"Proposed: Change line {i+1}: '{line.strip()}' to 'iSize H={adjusted_height}'", file=sys.stderr)
+                            print(f"Proposed: Change line {i+1}: '{line.strip()}' to "
+                                  "'iSize H={adjusted_height}'", file=logfile)
                     else:
                         modified_lines.append(line)
                 else:
@@ -161,34 +176,22 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
                 continue
         modified_lines.append(line)
 
-    # If iSize W or iSize H were not found, add them to the [Display] section
+    # Check if iSize W or iSize H were found in the [Display] section
     if not i_size_h_found or not i_size_w_found:
-        display_section_idx = -1
-        for i, line in enumerate(modified_lines):
-            if re.match(r'\[Display\]', line.strip()):
-                display_section_idx = i
-                break
-
-        if display_section_idx != -1:
-            insertion_point = display_section_idx + 1
-            if not i_size_h_found:
-                modified_lines.insert(insertion_point, f"iSize H={adjusted_height}\n")
-                dirty = True
-                changes_summary.append(f"iSize H: (Not found) -> {adjusted_height}")
-                if show_changes:
-                    print(f"Proposed: Insert 'iSize H={adjusted_height}' after [Display] section.", file=sys.stderr)
-                insertion_point += 1
-            if not i_size_w_found:
-                modified_lines.insert(insertion_point, f"iSize W={adjusted_width}\n")
-                dirty = True
-                changes_summary.append(f"iSize W: (Not found) -> {adjusted_width}")
-                if show_changes:
-                    print(f"Proposed: Insert 'iSize W={adjusted_width}' after [Display] section.", file=sys.stderr)
-        else:
-            print("Warning: [Display] section not found in file. Cannot insert iSize W/H if they don't exist.", file=sys.stderr)
+        missing_sec_str=""
+        if not i_size_w_found:
+            missing_sec_str="'iSize W' "
+        if not i_size_h_found:
+            missing_sec_str+=f"{'and ' if len(missing_sec_str)>0 else ''}'iSize H' "
+        print(f"Error: FalloutPrefs.ini appears to be corrupted. Missing {missing_sec_str}in the "
+              "[Display] section.", file=sys.stderr)
+        print("Please verify your FalloutPrefs.ini file or try generating a fresh one by launching "
+              "the game.", file=sys.stderr)
+        sys.exit(1) # Exit with an error code
 
     if not dirty and not show_changes:
-        print("No changes are needed for FalloutPrefs.ini. Resolutions are already set correctly.", file=sys.stderr)
+        print("No changes are needed for FalloutPrefs.ini. Resolutions are already set correctly.",
+              file=logfile)
         return
 
     if show_changes:
@@ -200,47 +203,55 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
             print("No actual changes to apply. Displaying proposed content only.", file=sys.stderr)
             return
 
-    if dirty:
-        print("\nChanges to be applied:")
+    if dirty: # Only prompt for confirmation if changes were actually detected
+        print("\nChanges to be applied:", file=logfile)
         for change in changes_summary:
-            print(f"- {change}")
+            print(f"- {change}", file=logfile)
 
         if not force_write:
-            confirmation = input("Apply these changes to FalloutPrefs.ini? (y/N): ").strip().lower()
+            logfile.write("Apply these changes to FalloutPrefs.ini? (y/N): ")
+            logfile.flush()
+            confirmation = input().strip().lower()
             if confirmation != 'y':
                 print("Changes not applied. Exiting.", file=sys.stderr)
                 return
-    else:
+    else: # This block is reached if show_changes was False and dirty was False
         print("No changes to apply. Exiting.", file=sys.stderr)
         return
 
     with open(fallout_prefs_path, 'w') as f:
         f.writelines(modified_lines)
-    print(f"Successfully modified {fallout_prefs_path}", file=sys.stderr)
+    print(f"Successfully modified {fallout_prefs_path}", file=logfile)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(add_help=False, description="Modify Fallout New Vegas FalloutPrefs.ini to fit the game to your primary display in windowed mode.")
+    parser = argparse.ArgumentParser(add_help=False,
+                                     description="Modify Fallout New Vegas FalloutPrefs.ini to fit "
+                                     "the game to your primary display in windowed mode.")
     parser.add_argument("-h", "--help", action="store_true", help="show this help message and exit")
     parser.add_argument("fallout_prefs_path", nargs='?',
-                        help="The full path to the FalloutPrefs.ini file. If not provided, script will attempt to locate it automatically.")
+                        help="The full path to the FalloutPrefs.ini file. If not provided, script "
+                        "will attempt to locate it automatically.")
     parser.add_argument("-f", "--force", action="store_true",
                         help="Force write changes to the file without prompting for confirmation.")
     parser.add_argument("-s", "--steam-path",
-                        help="Specify the root directory of your Steam installation (e.g., ~/.local/share/Steam). "
-                             "This is used for auto-detecting FalloutPrefs.ini if its path isn't given directly.")
+                        help="Specify the root directory of your Steam installation "
+                        "(e.g., ~/.local/share/Steam). This is used for auto-detecting "
+                        "FalloutPrefs.ini if its path isn't given directly.")
     parser.add_argument("--show-changes", action="store_true",
                         help="Print the proposed changes to the FalloutPrefs.ini file.")
 
     args = parser.parse_args()
 
+    logfile=sys.stderr if args.show_changes else sys.stdout
+
     # Print detected Steam installation path when the app starts
     _detected_steam_root_at_startup = find_steam_root(args.steam_path)
     if _detected_steam_root_at_startup:
-        print(f"Steam installation detected at: {_detected_steam_root_at_startup}", file=sys.stderr)
+        print(f"Steam installation detected at: {_detected_steam_root_at_startup}", file=logfile)
     else:
         print("Info: No Steam installation found in common locations. Please ensure Steam is installed or specify its path.", file=sys.stderr)
-    print("", file=sys.stderr)
+    print("", file=logfile)
 
     if args.help:
         parser.print_help()
@@ -255,7 +266,7 @@ if __name__ == "__main__":
             print(f"Error: Specified FalloutPrefs.ini not found at '{actual_fallout_prefs_path}'. Exiting.", file=sys.stderr)
             sys.exit(1)
     else:
-        print("Attempting to auto-detect FalloutPrefs.ini path...", file=sys.stderr)
+        print("Attempting to auto-detect FalloutPrefs.ini path...", file=logfile)
         actual_fallout_prefs_path = find_fallout_prefs_path(args.steam_path)
         if not actual_fallout_prefs_path:
             print("Error: Could not auto-detect FalloutPrefs.ini path.", file=sys.stderr)
@@ -265,5 +276,5 @@ if __name__ == "__main__":
 
     # Modify the fallout prefs file. Confirmation will be requested unless force
     # is provided.
-    print(f"Using FalloutPrefs.ini at: {actual_fallout_prefs_path}", file=sys.stderr)
+    print(f"Using FalloutPrefs.ini at: {actual_fallout_prefs_path}", file=logfile)
     modify_fallout_prefs(actual_fallout_prefs_path, force_write=args.force, show_changes=args.show_changes)
