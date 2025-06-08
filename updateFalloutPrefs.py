@@ -4,6 +4,69 @@ import argparse
 import sys
 import displayres
 
+# --- Constants for path detection ---
+FALLOUT_NV_APP_ID = "22380"
+# Relative path from the 'steamapps' directory to FalloutPrefs.ini for Proton/Wine installs
+FALLOUT_NV_INI_RELATIVE_PATH = f"compatdata/{FALLOUT_NV_APP_ID}/pfx/drive_c/users/steamuser/My Documents/My Games/FalloutNV/FalloutPrefs.ini"
+
+def find_steam_root(user_steam_path=None):
+    """
+    Attempts to locate a valid Steam installation root directory.
+
+    Args:
+        user_steam_path (str, optional): A user-provided Steam root directory.
+                                         e.g., ~/.local/share/Steam or ~/.steam/steam.
+
+    Returns:
+        str or None: The absolute path to the Steam root directory if found and valid, otherwise None.
+    """
+    potential_roots = []
+
+    # 1. User-provided path (if specified)
+    if user_steam_path:
+        expanded_path = os.path.expanduser(user_steam_path)
+        # If the user gives steamapps directory, get its parent
+        if os.path.basename(expanded_path) == "steamapps":
+            potential_roots.append(os.path.dirname(expanded_path))
+        else:
+            potential_roots.append(expanded_path)
+
+    # 2. Common default Steam installation paths on Linux
+    default_roots = [
+        os.path.expanduser("~/.local/share/Steam"),
+        os.path.expanduser("~/.steam/steam"), # Older Steam path, still common
+    ]
+
+    for root in default_roots:
+        if root not in potential_roots: # Avoid checking duplicates
+            potential_roots.append(root)
+
+    for root in potential_roots:
+        # Check if the 'steamapps' directory exists within the root
+        if os.path.isdir(os.path.join(root, "steamapps")):
+            return root # Found a valid Steam root
+
+    return None # No valid Steam root found
+
+def find_fallout_prefs_path(user_steam_path=None):
+    """
+    Attempts to locate the FalloutPrefs.ini file based on a detected Steam installation path.
+
+    Args:
+        user_steam_path (str, optional): A user-provided Steam root directory.
+
+    Returns:
+        str or None: The full path to FalloutPrefs.ini if found, otherwise None.
+    """
+    steam_root = find_steam_root(user_steam_path)
+    if steam_root:
+        steamapps_path = os.path.join(steam_root, "steamapps")
+        full_ini_path = os.path.join(steamapps_path, FALLOUT_NV_INI_RELATIVE_PATH)
+        if os.path.exists(full_ini_path):
+            return full_ini_path
+
+    return None # Path not found
+
 def modify_fallout_prefs(fallout_prefs_path, force_write=False):
     """
     Modifies the FalloutPrefs.ini file with the primary display's
@@ -89,7 +152,7 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False):
         modified_lines.append(line)
 
     # If iSize W or iSize H were not found, add them to the [Display] section
-    if not i_size_w_found or not i_size_h_found:
+    if not i_size_h_found or not i_size_w_found:
         # Find the index of the [Display] section to insert new keys
         display_section_idx = -1
         for i, line in enumerate(modified_lines):
@@ -98,16 +161,18 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False):
                 break
 
         if display_section_idx != -1:
+            # Insert H first, then W, to ensure W is before H if both are added
+            # This is a minor stylistic choice, but can matter for some INI parsers
             insertion_point = display_section_idx + 1
-            if not i_size_w_found:
-                modified_lines.insert(insertion_point, f"iSize W={adjusted_width}\n")
-                if not force_write:
-                    print(f"DRY RUN: Would insert 'iSize W={adjusted_width}' after [Display] section.", file=sys.stderr)
-                insertion_point += 1 # Adjust insertion point for the next potential insert
             if not i_size_h_found:
                 modified_lines.insert(insertion_point, f"iSize H={adjusted_height}\n")
                 if not force_write:
                     print(f"DRY RUN: Would insert 'iSize H={adjusted_height}' after [Display] section.", file=sys.stderr)
+                insertion_point += 1 # Adjust insertion point for the next potential insert
+            if not i_size_w_found:
+                modified_lines.insert(insertion_point, f"iSize W={adjusted_width}\n")
+                if not force_write:
+                    print(f"DRY RUN: Would insert 'iSize W={adjusted_width}' after [Display] section.", file=sys.stderr)
         else:
             print("Warning: [Display] section not found in file. Cannot insert iSize W/H if they don't exist.", file=sys.stderr)
 
@@ -124,28 +189,48 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False):
         print(f"Successfully modified {fallout_prefs_path}", file=sys.stderr)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Modify Fallout New Vegas FalloutPrefs.ini with primary display resolution.")
-    parser.add_argument("fallout_prefs_path",
-                        help="The full path to the FalloutPrefs.ini file.")
+    parser = argparse.ArgumentParser(add_help=False, description="Modify Fallout New Vegas FalloutPrefs.ini to fit the game to your primary display in windowed mode.")
+    parser.add_argument("-h", "--help", action="store_true", help="show this help message and exit")
+    # Make the positional argument optional by adding nargs='?'
+    parser.add_argument("fallout_prefs_path", nargs='?',
+                        help="The full path to the FalloutPrefs.ini file. If not provided, script will attempt to locate it automatically.")
     parser.add_argument("-f", "--force", action="store_true",
                         help="Force write changes to the file. By default, a dry run is performed.")
+    # New argument for Steam path
+    parser.add_argument("-s", "--steam-path",
+                        help="Specify the root directory of your Steam installation (e.g., ~/.local/share/Steam). "
+                             "This is used for auto-detecting FalloutPrefs.ini if its path isn't given directly.")
 
     args = parser.parse_args()
 
-    # For demonstration purposes, let's create a dummy file if it doesn't exist
-    # You should remove this dummy creation in a real scenario
-    if not os.path.exists(args.fallout_prefs_path):
-        print(f"Creating a dummy FalloutPrefs.ini at: {args.fallout_prefs_path}", file=sys.stderr)
-        os.makedirs(os.path.dirname(args.fallout_prefs_path), exist_ok=True)
-        with open(args.fallout_prefs_path, 'w') as f:
-            f.write("[Display]\n")
-            f.write("iSize W=1280\n")
-            f.write("iSize H=720\n")
-            f.write("bFull Screen=0\n")
-            f.write("[General]\n")
-            f.write("sLanguage=ENGLISH\n")
-            f.write("iPresentInterval=0\n")
-            f.write("iPresentInterval=1\n") # Duplicate key example
-            f.write("bFull Screen=0\n") # Duplicate key example
+    # --- Print detected Steam installation path when the app starts ---
+    _detected_steam_root_at_startup = find_steam_root(args.steam_path)
+    if _detected_steam_root_at_startup:
+        print(f"Steam installation detected at: {_detected_steam_root_at_startup}", file=sys.stderr)
+    else:
+        print("Info: No Steam installation found in common locations. Please ensure Steam is installed or specify its path.", file=sys.stderr)
+    print("", file=sys.stderr)
 
-    modify_fallout_prefs(args.fallout_prefs_path, force_write=args.force)
+    if args.help:
+        parser.print_help()
+        sys.exit(0)
+
+    actual_fallout_prefs_path = None
+
+    # Determine the FalloutPrefs.ini path
+    if args.fallout_prefs_path:
+        actual_fallout_prefs_path = os.path.expanduser(args.fallout_prefs_path)
+        if not os.path.exists(actual_fallout_prefs_path):
+            print(f"Error: Specified FalloutPrefs.ini not found at '{actual_fallout_prefs_path}'. Exiting.", file=sys.stderr)
+            sys.exit(1) # Exit with failure if explicit path doesn't exist
+    else:
+        print("Attempting to auto-detect FalloutPrefs.ini path...", file=sys.stderr)
+        actual_fallout_prefs_path = find_fallout_prefs_path(args.steam_path)
+        if not actual_fallout_prefs_path:
+            print("Error: Could not auto-detect FalloutPrefs.ini path.", file=sys.stderr)
+            print("Please ensure Steam is installed, Fallout New Vegas is installed via Proton/Wine,", file=sys.stderr)
+            print("and either provide the full path using the positional argument or specify your Steam root directory with --steam-path.", file=sys.stderr)
+            sys.exit(1) # Exit with failure
+
+    print(f"Using FalloutPrefs.ini at: {actual_fallout_prefs_path}", file=sys.stderr)
+    modify_fallout_prefs(actual_fallout_prefs_path, force_write=args.force)
