@@ -68,7 +68,7 @@ def find_fallout_prefs_path(user_steam_path=None):
 def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=False):
     """
     Modifies the FalloutPrefs.ini file with the primary display's
-    xrandr_reported_resolution, adjusting for window borders and title bars.
+    actual_display_resolution, adjusting for window borders and title bars.
 
     Args:
         fallout_prefs_path (str): The path to the FalloutPrefs.ini file.
@@ -96,11 +96,11 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
         print("Error: No primary display found.", file=sys.stderr)
         return
 
-    xrandr_reported_width, xrandr_reported_height = primary_display['xrandr_reported_resolution']
+    display_width, display_height = primary_display['actual_display_resolution']
     scalefactor_match=re.match(r'^\d+\.\d+', primary_display['gnome_scale_factor'])
     scalefactor = float(scalefactor_match.group(0))
-    print(f"Primary display xrandr_reported_resolution: "
-          "{xrandr_reported_width}x{xrandr_reported_height}", file=logfile)
+    print(f"Primary display resolution: "
+          f"{display_width}x{display_height}", file=logfile)
     print(f"scalefactor: {scalefactor}", file=logfile)
 
     # Window manager titlebar: 64 pixels
@@ -111,8 +111,8 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
     BORDER_HEIGHT = 2.0/2     # Height for bottom window border
     BORDER_WIDTH = 1.0/2      # Width for left/right window borders (each)
 
-    adjusted_width = int(round(xrandr_reported_width - (BORDER_WIDTH*2)*math.ceil(scalefactor)))
-    adjusted_height = int(round(xrandr_reported_height - (TITLEBAR_HEIGHT + BORDER_HEIGHT) *
+    adjusted_width = int(round(display_width - (BORDER_WIDTH*2)*math.ceil(scalefactor)))
+    adjusted_height = int(round(display_height - (TITLEBAR_HEIGHT + BORDER_HEIGHT) *
                                 math.ceil(scalefactor)))
 
     print(f"Adjusted resolution for Fallout New Vegas: {adjusted_width}x{adjusted_height}",
