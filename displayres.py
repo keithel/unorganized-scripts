@@ -285,12 +285,21 @@ def main():
         action='store_true',
         help="Show only the xrandr logical resolution for each display. If -d is also specified, only print it for that display."
     )
+    parser.add_argument(
+        '-r', '--raw',
+        action='store_true',
+        help="Print the displays in raw format - showing the Python structure"
+    )
     args = parser.parse_args()
 
     all_display_info = get_display_info()
 
     primary_monitor = next((m for m in all_display_info if m['is_primary']), None)
     primary_display_id = primary_monitor['id'] if primary_monitor else None
+
+    #all_display_info.append(all_display_info[0].copy())
+    #all_display_info[1]['id'] = "foo"
+    #all_display_info[1]['is_primary'] = False
 
     # Handle specific combinations and the new --xrandr-logical-res option
     if args.xrandr_logical_res and args.primary:
@@ -329,17 +338,35 @@ def main():
             print("No primary display found.")
         return
 
-    if args.display:
+    if not args.display:
+        print("---")
+        print("Currently Connected Displays:")
+        print("---")
+    for monitor in all_display_info:
         found = False
-        for monitor in all_display_info:
-            if monitor['id'] == args.display:
-                print(f"Display: {monitor['id']}")
+        #print(f"{args.display}, {monitor['id']}")
+        if monitor['id'] == args.display or not args.display:
+            if args.raw:
+                print(monitor)
+            else:
+                status = "(Primary)" if monitor['is_primary'] else ""
+                if args.display:
+                    print(f"Display: {monitor['id']}")
+                else:
+                    print(f"ID: {monitor['id']} {status}")
                 print(f"  Configured/Actual Resolution: {_format_resolution_tuple(monitor['actual_display_resolution'])}")
                 print(f"  Logical/Rendered Resolution (Gnome): {_format_resolution_tuple(monitor['logical_resolution'])}")
                 print(f"  Gnome UI Scale Factor: {monitor['gnome_scale_factor']}")
                 print(f"  XRANDR Reported Resolution: {_format_resolution_tuple(monitor['xrandr_reported_resolution'])}")
-                found = True
-                break
+            found = True
+        if not args.display:
+            print("-" * 20)
+
+        #print(("" if found else "not ") + "found")
+        if args.display and found:
+            return
+
+    if args.display:
         if not found:
             print(f"Error: Display '{args.display}' not found or not currently connected.")
             print("Note: This script is most accurate for Xorg sessions. If you are on Wayland, ~/.config/monitors.xml may not contain active configuration.")
@@ -349,18 +376,6 @@ def main():
         print("No connected displays found.")
         print("Note: This script is most accurate for Xorg sessions.")
         return
-
-    print("---")
-    print("Currently Connected Displays:")
-    print("---")
-    for monitor in all_display_info:
-        status = "(Primary)" if monitor['is_primary'] else ""
-        print(f"  ID: {monitor['id']} {status}")
-        print(f"    Configured/Actual Resolution: {_format_resolution_tuple(monitor['actual_display_resolution'])}")
-        print(f"    Logical/Rendered Resolution (Gnome): {_format_resolution_tuple(monitor['logical_resolution'])}")
-        print(f"    Gnome UI Scale Factor: {monitor['gnome_scale_factor']}")
-        print(f"    XRANDR Reported Resolution: {_format_resolution_tuple(monitor['xrandr_reported_resolution'])}")
-        print("-" * 20)
 
     if primary_display_id:
         print(f"\nPrimary Display ID: {primary_display_id}")
