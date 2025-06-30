@@ -97,7 +97,8 @@ def modify_fallout_prefs(fallout_prefs_path, force_write=False, show_changes=Fal
         return
 
     xrandr_reported_width, xrandr_reported_height = primary_display['xrandr_reported_resolution']
-    scalefactor = float(primary_display['gnome_scale_factor'][:-1])
+    scalefactor_match=re.match(r'^\d+\.\d+', primary_display['gnome_scale_factor'])
+    scalefactor = float(scalefactor_match.group(0))
     print(f"Primary display xrandr_reported_resolution: "
           "{xrandr_reported_width}x{xrandr_reported_height}", file=logfile)
     print(f"scalefactor: {scalefactor}", file=logfile)
