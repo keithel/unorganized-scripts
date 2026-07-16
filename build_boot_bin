@@ -1,0 +1,58 @@
+#!/bin/bash
+set -e -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+VITIS_VER="2023.2"
+VITIS_SETUP_SCRIPT="settings64.sh"
+VITIS_SETUP_SCRIPT_RELPATH="$VITIS_VER/$VITIS_SETUP_SCRIPT"
+
+if command -v bootgen >/dev/null ; then
+    echo "Vitis SDK settings64.sh already sourced, good."
+elif [ -n "${VITIS_DIR-}" ] ; then
+    if [ ! -e "$VITIS_DIR" ] ; then
+        echo >&2 "$VITIS_DIR doesn't exist.
+Please either clear the variable to test default paths, or set to the root of a Vitis SDK."
+        echo >&2 "aborting."
+        exit 1
+    elif [ -e "$VITIS_DIR/$VITIS_SETUP_SCRIPT" ] ; then
+        source "$VITIS_DIR/$VITIS_SETUP_SCRIPT"
+    else
+        echo >&2 "$VITIS_DIR/$VITIS_SETUP_SCRIPT doesn't exist."
+        echo >&2 "Please check VITIS_DIR and make sure it is pointing to a valid VITIS SDK."
+        echo >&2 "aborting."
+        exit 1
+    fi
+elif [ -e "../Xilinx/Vitis/$VITIS_SETUP_SCRIPT_RELPATH" ] ; then
+    source "../Xilinx/Vitis/$VITIS_SETUP_SCRIPT_RELPATH"
+elif [ -e "$HOME/Build/tools/Xilinx/Vitis/$VITIS_SETUP_SCRIPT_RELPATH" ] ; then
+    source "$HOME/Build/tools/Xilinx/Vitis/$VITIS_SETUP_SCRIPT_RELPATH"
+else
+    echo >&2 "Couldn't find Vitis 2023.2 SDK. Please set VITIS_DIR env var to point to it."
+    echo >&2 "aborting."
+    exit 1
+fi
+
+# settings64.sh should now be sourced.
+
+# Check if bootgen.bif exists.
+if [ ! -e "./bootgen.bif" ]; then
+    echo >&2 "bootgen.bif not found. Something went wrong."
+    echo >&2 "aborting"
+    exit 2
+fi
+
+
+if [ -e BOOT.BIN ]; then
+    BBBKDIR="bootbin_backup"
+    if [ ! -d "$BBBKDIR" ]; then
+        mkdir "$BBBKDIR"
+    fi
+    daysecs=$(( $(date +%s) - $(date -d "$(date '+%Y-%m-%d')" +%s) ))
+    bootbin_bkup_fn="BOOT.BIN.$(date "+%Y%m%d.")$daysecs"
+    echo "Old BOOT.BIN exists, moving to $BBBKDIR/$bootbin_bkup_fn"
+    mv BOOT.BIN "$BBBKDIR/$bootbin_bkup_fn"
+fi
+
+bootgen -arch zynqmp -image bootgen.bif -o BOOT.BIN
