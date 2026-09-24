@@ -1,0 +1,37 @@
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# A test script that shows how to capture `time`s 3 stderr timing lines to a
+# variable, while leaving the run command's stdout and stderr untouched.
+# This version uses a temp file for capturing the timing output.
+
+# Create a test script that prints to stdout and stderr
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+testscript="$tmpdir/test_script"
+cat >"$testscript" <<EOF
+#!/bin/bash
+echo "stdout"
+echo >&2 "stderr"
+EOF
+chmod u+x "$testscript"
+
+# Here's the magic for capturing just the 3 stderr timing lines, with a temp file:
+
+# mktemp: atomic creation, 0600 perms, unpredictable name — no TOCTOU/symlink-swap window.
+tmpfile=$(mktemp) || exit 1
+trap 'rm -rf "$tmpdir" "$tmpfile"' EXIT
+
+exec 3>&2 # fd3 = duplicate of real stderr, held open for the command's own errors
+
+# Run the command redirecting its stderr to FD3, redirect time's stderr to tmpfile
+{ time { $testscript 2>&3; }; } 2>"$tmpfile"
+
+exec 3>&- # close fd3
+
+# Open tmpfile and read it into timing_output
+timing_output=$(<"$tmpfile")
+
+echo "timing_output: $timing_output" # or use it however you like
